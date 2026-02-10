@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
-import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import { Select } from './ui/Select'
@@ -14,8 +15,13 @@ type Props = {
 }
 
 export default function OpeningStock({ initialItemId, isEmbedded, onSuccess }: Props) {
+    const navigate = useNavigate()
+    const location = useLocation()
+    const stateItemId = location.state?.itemId
+    const effectiveInitialId = initialItemId || stateItemId || ''
+
     const [items, setItems] = useState<Item[]>([])
-    const [itemId, setItemId] = useState(initialItemId || '')
+    const [itemId, setItemId] = useState(effectiveInitialId)
     const [qty, setQty] = useState(0)
     const [asOfDate, setAsOfDate] = useState(() => new Date().toISOString().split('T')[0])
     const [reason, setReason] = useState('Opening Stock')
@@ -27,12 +33,12 @@ export default function OpeningStock({ initialItemId, isEmbedded, onSuccess }: P
     const [success, setSuccess] = useState<string | null>(null)
 
     useEffect(() => {
-        if (!initialItemId) fetchItems()
-    }, [initialItemId])
+        fetchItems()
+    }, [])
 
     useEffect(() => {
-        if (initialItemId) setItemId(initialItemId)
-    }, [initialItemId])
+        if (effectiveInitialId) setItemId(effectiveInitialId)
+    }, [effectiveInitialId])
 
     useEffect(() => {
         if (!itemId) {
@@ -84,7 +90,9 @@ export default function OpeningStock({ initialItemId, isEmbedded, onSuccess }: P
             setSuccess("Opening Stock Set!")
             setQty(0)
             setReason('Opening Stock')
+            setReason('Opening Stock')
             if (onSuccess) setTimeout(onSuccess, 1000)
+            else setTimeout(() => navigate(-1), 1000)
             if (!initialItemId) setItemId('')
         } catch (err: unknown) {
             if (err instanceof Error) setError(err.message)
@@ -153,10 +161,13 @@ export default function OpeningStock({ initialItemId, isEmbedded, onSuccess }: P
     if (isEmbedded) return content
 
     return (
-        <div className="w-full">
+        <div className="w-full max-w-6xl mx-auto space-y-6 px-3 sm:px-4 lg:px-6 pb-20">
             <Card className="shadow-lg border-gray-200">
                 <CardHeader className="bg-blue-50 border-b border-blue-100 pb-4">
-                    <CardTitle className="text-xl text-blue-800">Setup Opening Balance</CardTitle>
+                    <CardTitle className="text-xl text-blue-800">Setup Opening Stock</CardTitle>
+                    <CardDescription className="text-blue-600/80">
+                        Input saldo awal stok barang. Pastikan tanggal dan jumlah sesuai dengan kondisi fisik saat cut-off.
+                    </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {content}

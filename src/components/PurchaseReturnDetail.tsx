@@ -7,6 +7,7 @@ import { Icons } from './ui/Icons'
 import { formatCurrency, formatDate, safeDocNo } from '../lib/format'
 import DocumentHeaderCard from './shared/DocumentHeaderCard'
 import LineItemsTable from './shared/LineItemsTable'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 type PurchaseReturnDetail = {
     id: string
@@ -17,6 +18,7 @@ type PurchaseReturnDetail = {
     total_amount: number
     status: 'DRAFT' | 'POSTED' | 'VOID'
     notes: string | null
+    payment_method_code: string | null
     created_at: string
 }
 
@@ -38,7 +40,10 @@ export default function PurchaseReturnDetail() {
     const [items, setItems] = useState<ReturnItem[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [success, setSuccess] = useState<string | null>(null)
     const [posting, setPosting] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+    const { confirm } = useConfirm()
 
     const normalizeItems = useCallback((rows: ReturnItem[]) => {
         const map = new Map<string, ReturnItem>()
@@ -78,6 +83,7 @@ export default function PurchaseReturnDetail() {
                     purchase_id,
                     total_amount,
                     status,
+                    payment_method_code,
                     notes,
                     created_at,
                     purchases!purchase_id (
@@ -138,18 +144,53 @@ export default function PurchaseReturnDetail() {
 
     async function handlePost() {
         if (!returnDoc) return
-        if (!confirm("Confirm POST Return? This handles Stock, AP & Journals.")) return
+        const ok = await confirm({
+            title: 'Post Purchase Return',
+            description: 'Confirm POST Return? This handles Stock, AP & Journals.',
+            confirmText: 'POST',
+            cancelText: 'Cancel',
+            tone: 'danger'
+        })
+        if (!ok) return
 
         setPosting(true)
+        setSuccess(null)
         try {
-            const { error } = await supabase.rpc('rpc_post_purchase_return', { p_return_id: returnDoc.id })
-            if (error) throw error
-            alert("Return POSTED Successfully!")
+            const { error: postError } = await supabase.rpc('rpc_post_purchase_return', { p_return_id: returnDoc.id })
+            if (postError) throw postError
+            setSuccess("Return POSTED Successfully!")
             fetchReturnDetail(returnDoc.id)
         } catch (err: unknown) {
             setError(getErrorMessage(err, 'Unknown error'))
         } finally {
             setPosting(false)
+        }
+    }
+
+    async function handleDelete() {
+        if (!returnDoc) return
+        const ok = await confirm({
+            title: 'Delete Draft Return',
+            description: 'Delete this draft return? This action cannot be undone.',
+            confirmText: 'Delete',
+            cancelText: 'Cancel',
+            tone: 'danger'
+        })
+        if (!ok) return
+        setDeleting(true)
+        setError(null)
+        try {
+            const { error: delError } = await supabase
+                .from('purchase_returns')
+                .delete()
+                .eq('id', returnDoc.id)
+                .eq('status', 'DRAFT')
+            if (delError) throw delError
+            navigate('/purchase-returns/history')
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, 'Failed to delete return'))
+        } finally {
+            setDeleting(false)
         }
     }
 
@@ -187,6 +228,10 @@ export default function PurchaseReturnDetail() {
         {
             label: 'Vendor',
             value: returnDoc.vendor_name,
+        },
+        {
+            label: 'Refund Method',
+            value: returnDoc.payment_method_code || 'CASH',
         },
         {
             label: 'Total',
@@ -230,6 +275,16 @@ export default function PurchaseReturnDetail() {
 
     return (
         <div className="w-full space-y-6">
+            {success && (
+                <div className="p-4 bg-green-50 border border-green-200 text-green-700 rounded-md flex items-center gap-2">
+                    <Icons.CheckCircle className="w-5 h-5 flex-shrink-0" /> {success}
+                </div>
+            )}
+            {error && (
+                <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
+                    <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {error}
+                </div>
+            )}
             <div className="flex justify-between items-center">
                 <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return</h2>
                 <div className="flex gap-2 no-print">
@@ -240,9 +295,14 @@ export default function PurchaseReturnDetail() {
                         ← Back to List
                     </Button>
                     {returnDoc.status === 'DRAFT' && (
-                        <Button onClick={handlePost} disabled={posting} className="bg-green-600 hover:bg-green-700 text-white">
-                            {posting ? 'Posting...' : 'POST Return'}
-                        </Button>
+                        <>
+                            <Button onClick={handlePost} disabled={posting} className="bg-green-600 hover:bg-green-700 text-white">
+                                {posting ? 'Posting...' : 'POST Return'}
+                            </Button>
+                            <Button onClick={handleDelete} disabled={deleting} variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                                {deleting ? 'Deleting...' : 'Delete Draft'}
+                            </Button>
+                        </>
                     )}
                 </div>
             </div>
@@ -253,21 +313,26 @@ export default function PurchaseReturnDetail() {
                 <h1 className="text-2xl font-bold text-gray-900 mt-2">PURCHASE RETURN</h1>
             </div>
 
-            <DocumentHeaderCard
-                title="Purchase Return"
-                docNo={safeDocNo(null, returnDoc.id, true)}
-                status={returnDoc.status}
-                fields={headerFields}
-                notes={returnDoc.notes}
-            />
-
-            <LineItemsTable
-                title="Return Items"
-                rows={items}
-                columns={lineItemColumns}
-                totalValue={formatCurrency(returnDoc.total_amount)}
-                emptyLabel="No items added"
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-1 space-y-6">
+                    <DocumentHeaderCard
+                        title="Purchase Return"
+                        docNo={safeDocNo(null, returnDoc.id, true)}
+                        status={returnDoc.status}
+                        fields={headerFields}
+                        notes={returnDoc.notes}
+                    />
+                </div>
+                <div className="lg:col-span-2">
+                    <LineItemsTable
+                        title="Return Items"
+                        rows={items}
+                        columns={lineItemColumns}
+                        totalValue={formatCurrency(returnDoc.total_amount)}
+                        emptyLabel="No items added"
+                    />
+                </div>
+            </div>
         </div>
     )
 }

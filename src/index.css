@@ -65,6 +65,15 @@
   .card-hover {
     @apply transition-all duration-300 ease-out;
   }
+
+  /* Fix for native date picker calendar positioning */
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+  }
+
+  input[type="date"] {
+    position: relative;
+  }
 }
 
 @layer utilities {

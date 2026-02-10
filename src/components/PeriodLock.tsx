@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
 import { getErrorMessage } from "../lib/errors";
 import { StatusBadge } from "./ui/StatusBadge";
 import { formatCurrency } from "../lib/format";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 
 type Period = {
   id: string;
@@ -191,6 +192,7 @@ export default function PeriodLock() {
   const [closingSkipped, setClosingSkipped] = useState(false);
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState<string | null>(null);
+  const { confirm } = useConfirm();
 
   // -- 1. PERIODS OPS --
   // Wrap in useCallback to allow usage in useEffect dependency
@@ -234,7 +236,14 @@ export default function PeriodLock() {
       return;
     }
 
-    if (!confirm("Re-open this period?")) return;
+    const ok = await confirm({
+      title: "Re-open Period",
+      description: "Re-open this period? This will allow new transactions.",
+      confirmText: "Re-open",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
     const { error } = await supabase.rpc("rpc_set_period_status", {
       p_period_id: p.id,
       p_status: "OPEN",

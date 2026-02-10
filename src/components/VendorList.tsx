@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState, memo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/Badge'
 import { Icons } from './ui/Icons'
 import { type Vendor } from './VendorForm'
+import { useDebounce } from '../hooks/useDebounce'
 
 interface VendorListProps {
     vendors: Vendor[]
@@ -16,14 +17,29 @@ interface VendorListProps {
     onCreatePurchase: (vendor: Vendor) => void
 }
 
-export default function VendorList({ vendors, loading, onEdit, onDelete, onView, onCreatePurchase }: VendorListProps) {
+function VendorList({ vendors, loading, onEdit, onDelete, onView, onCreatePurchase }: VendorListProps) {
     const [searchTerm, setSearchTerm] = useState('')
+    const debouncedSearch = useDebounce(searchTerm, 350)
 
-    const filteredVendors = vendors.filter(v =>
-        v.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (v.phone && v.phone.includes(searchTerm)) ||
-        (v.address && v.address.toLowerCase().includes(searchTerm.toLowerCase()))
-    )
+    const filteredVendors = useMemo(() => (
+        vendors.filter(v =>
+            v.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+            (v.phone && v.phone.includes(debouncedSearch)) ||
+            (v.address && v.address.toLowerCase().includes(debouncedSearch.toLowerCase()))
+        )
+    ), [vendors, debouncedSearch])
+
+    const getTypeLabel = (type?: Vendor['vendor_type']) => {
+        switch (type) {
+            case 'KONVEKSI':
+                return 'Konveksi'
+            case 'INTERNAL':
+                return 'Internal'
+            case 'SUPPLIER':
+            default:
+                return 'Supplier'
+        }
+    }
 
     return (
         <Card>
@@ -45,6 +61,7 @@ export default function VendorList({ vendors, loading, onEdit, onDelete, onView,
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Name</TableHead>
+                                <TableHead>Type</TableHead>
                                 <TableHead>Phone</TableHead>
                                 <TableHead>Address</TableHead>
                                 <TableHead>Status</TableHead>
@@ -52,7 +69,7 @@ export default function VendorList({ vendors, loading, onEdit, onDelete, onView,
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {loading ? <TableRow><TableCell colSpan={5} className="text-center">Loading...</TableCell></TableRow> : filteredVendors.map(v => (
+                            {loading ? <TableRow><TableCell colSpan={6} className="text-center">Loading...</TableCell></TableRow> : filteredVendors.map(v => (
                                 <TableRow key={v.id} className={!v.is_active ? 'bg-gray-100 opacity-60' : ''}>
                                     <TableCell className="font-medium">
                                         <button
@@ -62,6 +79,9 @@ export default function VendorList({ vendors, loading, onEdit, onDelete, onView,
                                         >
                                             {v.name}
                                         </button>
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline">{getTypeLabel(v.vendor_type)}</Badge>
                                     </TableCell>
                                     <TableCell>{v.phone}</TableCell>
                                     <TableCell className="max-w-xs truncate">{v.address}</TableCell>
@@ -92,3 +112,5 @@ export default function VendorList({ vendors, loading, onEdit, onDelete, onView,
         </Card>
     )
 }
+
+export default memo(VendorList)

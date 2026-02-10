@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
@@ -10,7 +11,7 @@ import { PageHeader } from './ui/PageHeader'
 import { Alert } from './ui/Alert'
 import { Section } from './ui/Section'
 
-type Account = { id: string; code: string; name: string }
+type Account = { id: string; code: string; name: string; account_type: string }
 
 type Line = {
     account_id: string
@@ -34,9 +35,11 @@ type HistoryDetail = {
 }
 
 export default function OpeningBalance() {
+    const navigate = useNavigate()
     const [history, setHistory] = useState<HistoryEntry[]>([])
     const [historyDetails, setHistoryDetails] = useState<Record<string, HistoryDetail[]>>({})
     const [expandedDate, setExpandedDate] = useState<string | null>(null)
+    const [hasOpeningBalance, setHasOpeningBalance] = useState(false)
     const [accounts, setAccounts] = useState<Account[]>([])
     const [asOfDate, setAsOfDate] = useState('')
     const [lines, setLines] = useState<Line[]>([{ account_id: '', debit: 0, credit: 0 }])
@@ -54,7 +57,11 @@ export default function OpeningBalance() {
     }, [])
 
     async function fetchAccounts() {
-        const { data, error } = await supabase.from('accounts').select('id, code, name').eq('is_active', true).order('code')
+        const { data, error } = await supabase
+            .from('accounts')
+            .select('id, code, name, account_type')
+            .eq('is_active', true)
+            .order('code')
         if (error) setError(error.message)
         else setAccounts(data || [])
     }
@@ -92,6 +99,7 @@ export default function OpeningBalance() {
         const sortedHistory = Object.values(agg).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
         setHistory(sortedHistory)
         setHistoryDetails(details)
+        setHasOpeningBalance(sortedHistory.length > 0)
 
         if (!isEditing) {
             setShowForm(sortedHistory.length === 0)
@@ -203,7 +211,7 @@ export default function OpeningBalance() {
         new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(val)
 
     return (
-        <div className="w-full space-y-6 pb-20">
+        <div className="w-full max-w-6xl mx-auto space-y-6 px-3 sm:px-4 lg:px-6 pb-20">
             <PageHeader
                 title="Opening Balance Setup"
                 description="Opening Balance hanya untuk saldo awal. Untuk jurnal operasional harian gunakan Jurnal Umum."
@@ -215,11 +223,18 @@ export default function OpeningBalance() {
                 title="Penting"
                 description="Opening Balance hanya dipakai sekali untuk saldo awal periode. Untuk transaksi harian (gaji, biaya, dll) gunakan Jurnal Umum."
             />
+            {hasOpeningBalance && !isEditing && (
+                <Alert
+                    variant="info"
+                    title="Opening Balance sudah ada"
+                    description="Form disembunyikan agar tidak salah input. Gunakan Jurnal Umum untuk transaksi harian. Jika perlu koreksi, gunakan tombol Edit pada riwayat."
+                />
+            )}
 
             <div className="flex flex-wrap gap-2">
                 <Button
                     variant="outline"
-                    onClick={() => (window.location.href = '/journals/manual')}
+                    onClick={() => navigate('/journals/manual')}
                     icon={<Icons.Edit className="w-4 h-4" />}
                 >
                     Ke Jurnal Umum
@@ -292,7 +307,17 @@ export default function OpeningBalance() {
                                                     value={line.account_id || undefined}
                                                     onChange={e => updateLine(i, 'account_id', e.target.value)}
                                                     placeholder="-- Select Account --"
-                                                    options={accounts.map(a => ({ label: `${a.code} - ${a.name}`, value: a.id }))}
+                                                    options={accounts.map(a => ({
+                                                        label: `${a.code} - ${a.name} (${a.account_type || 'ASSET'})`,
+                                                        value: a.id,
+                                                        searchText: `${a.code} ${a.name} ${a.account_type || 'ASSET'}`,
+                                                        content: (
+                                                            <div className="flex items-center justify-between w-full gap-3">
+                                                                <span className="text-sm font-medium text-slate-700">{a.code} - {a.name}</span>
+                                                                <Badge variant="outline" className="text-[10px] uppercase tracking-wide px-2 py-0.5">{a.account_type || 'ASSET'}</Badge>
+                                                            </div>
+                                                        )
+                                                    }))}
                                                     className="!mb-0"
                                                 />
                                             </TableCell>

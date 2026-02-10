@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Select } from "./ui/Select";
+import { ButtonSelect } from "./ui/ButtonSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 
 type Props = {
@@ -26,7 +26,7 @@ export function FinancePaymentForm({
         new Date().toISOString().split("T")[0]
     );
     const [amount, setAmount] = useState(initialAmount);
-    const [method, setMethod] = useState("CASH");
+    const [method, setMethod] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
     function getErrorMessage(err: unknown) {
@@ -49,13 +49,6 @@ export function FinancePaymentForm({
         setAmount(initialAmount);
     }, [initialAmount]);
 
-    useEffect(() => {
-        // Default method choice if not set
-        if (paymentMethods.length && !paymentMethods.some(m => m.code === method)) {
-            setMethod(paymentMethods[0].code);
-        }
-    }, [paymentMethods, method]);
-
     function handleAmountChange(value: string) {
         const parsed = parseFloat(value);
         if (isNaN(parsed)) {
@@ -77,10 +70,14 @@ export function FinancePaymentForm({
             onError("Amount cannot exceed outstanding amount");
             return;
         }
+        if (!method) {
+            onError("Pilih Metode Pembayaran (CASH/BANK)!");
+            return;
+        }
 
         setSubmitting(true);
         try {
-            const normalizedMethod = (method || "CASH").toUpperCase();
+            const normalizedMethod = method.toUpperCase();
             const { error } = await supabase.rpc("rpc_create_payment_ap", {
                 p_ap_bill_id: billId,
                 p_amount: amount,
@@ -99,7 +96,7 @@ export function FinancePaymentForm({
     const methodOptions =
         paymentMethods.length > 0
             ? paymentMethods.map((m) => ({
-                label: `${m.code} - ${m.name}`,
+                label: `${m.code}`, // Short label for buttons
                 value: m.code,
             }))
             : [
@@ -130,12 +127,17 @@ export function FinancePaymentForm({
                 <span>Outstanding: {initialAmount.toLocaleString()}</span>
                 <span>Remaining: {Math.max(initialAmount - amount, 0).toLocaleString()}</span>
             </div>
-            <Select
-                label="Method"
-                value={method}
-                onChange={(e) => setMethod(e.target.value)}
-                options={methodOptions}
-            />
+
+            <div className="my-2">
+                <ButtonSelect
+                    label="Method"
+                    value={method}
+                    onChange={(val) => setMethod(val)}
+                    options={methodOptions}
+                />
+                {!method && <p className="text-xs text-red-500 mt-1">* Wajib pilih metode</p>}
+            </div>
+
             <Button
                 className="w-full mt-4 bg-red-600 hover:bg-red-700"
                 onClick={handleSubmit}

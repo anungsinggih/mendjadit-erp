@@ -15,7 +15,7 @@ import { Section } from './ui/Section'
 import { getErrorMessage } from '../lib/errors'
 
 // --- TYPES ---
-type Item = { id: string; name: string; sku: string }
+type Item = { id: string; name: string; sku: string; size_name?: string; color_name?: string }
 
 type AdjustmentHistory = {
     id: string
@@ -65,8 +65,23 @@ function StockAdjustmentForm({
     }, [initialItemId])
 
     async function fetchItems() {
-        const { data } = await supabase.from('items').select('id, name, sku').order('name')
-        setItems(data || [])
+        const { data } = await supabase.from('items').select('id, name, sku, sizes(name), colors(name)').order('name')
+
+        const mappedItems = (data || []).map((item: {
+            id: string;
+            name: string;
+            sku: string;
+            sizes: unknown;
+            colors: unknown;
+        }) => ({
+            id: item.id,
+            name: item.name,
+            sku: item.sku,
+            size_name: (item.sizes as { name: string } | null)?.name,
+            color_name: (item.colors as { name: string } | null)?.name,
+        }));
+
+        setItems(mappedItems)
     }
 
     async function handleSubmit() {
@@ -139,7 +154,13 @@ function StockAdjustmentForm({
                             onChange={setItemId}
                             placeholder="-- Select Item --"
                             searchPlaceholder="Search Item..."
-                            options={items.map(i => ({ label: `${i.sku} - ${i.name}`, value: i.id }))}
+                            options={items.map(i => {
+                                const variantLabel = [i.size_name, i.color_name].filter(Boolean).join(", ");
+                                return {
+                                    label: `${i.sku} - ${i.name}${variantLabel ? ` (${variantLabel})` : ''}`,
+                                    value: i.id
+                                };
+                            })}
                         />
                     </div>
                 )}

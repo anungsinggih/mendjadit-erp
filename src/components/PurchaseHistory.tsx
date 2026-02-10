@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, memo } from "react";
 import { supabase } from "../supabaseClient";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import {
   Table,
@@ -15,15 +15,19 @@ import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { Alert } from "./ui/Alert";
 import { StatusBadge } from "./ui/StatusBadge";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 import { Badge } from "./ui/Badge";
 import { Icons } from "./ui/Icons";
 import { ResponsiveTable } from "./ui/ResponsiveTable";
 import { EmptyState } from "./ui/EmptyState";
 import { formatCurrency, formatDate, safeDocNo } from "../lib/format";
 import { usePagination } from "../hooks/usePagination";
+import { useDebounce } from "../hooks/useDebounce";
 import { Pagination } from "./ui/Pagination";
 import { PageHeader } from "./ui/PageHeader";
 import { Section } from "./ui/Section";
+import { usePurchaseHistoryQuery, usePurchaseReturnDraftCountQuery } from "../hooks/useQueries";
+
 
 type PurchaseRecord = {
   id: string;
@@ -33,135 +37,155 @@ type PurchaseRecord = {
   vendor_name: string;
   terms: "CASH" | "CREDIT";
   total_amount: number;
+  payment_method_code?: string | null;
+  ap_outstanding?: number | null;
   status: "DRAFT" | "POSTED" | "VOID";
   created_at: string;
 };
 
+type PurchaseRowProps = {
+  purchase: PurchaseRecord;
+  onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
+  onPost: (id: string) => void;
+  postingId: string | null;
+};
+
+const PurchaseRow = memo(({ purchase, onOpen, onEdit, onPost, postingId }: PurchaseRowProps) => (
+  <TableRow
+    className="cursor-pointer hover:bg-slate-50"
+    onClick={() => onOpen(purchase.id)}
+  >
+    <TableCell>{formatDate(purchase.purchase_date)}</TableCell>
+    <TableCell className="font-mono text-sm">
+      {safeDocNo(purchase.purchase_no, purchase.id)}
+    </TableCell>
+    <TableCell>{purchase.vendor_name}</TableCell>
+    <TableCell>
+      <div className="flex items-center gap-2">
+        <Badge
+          className={
+            purchase.terms === "CASH"
+              ? "bg-blue-100 text-blue-800"
+              : "bg-orange-100 text-orange-800"
+          }
+        >
+          {purchase.terms}
+        </Badge>
+        {purchase.terms === "CASH" && (
+          <span className="text-[11px] text-gray-500 font-medium">
+            {purchase.payment_method_code || "-"}
+          </span>
+        )}
+      </div>
+    </TableCell>
+    <TableCell className="text-right font-medium">
+      {formatCurrency(purchase.total_amount)}
+    </TableCell>
+    <TableCell className="text-right">
+      {purchase.terms === "CREDIT" && purchase.ap_outstanding != null
+        ? formatCurrency(purchase.ap_outstanding)
+        : "-"}
+    </TableCell>
+    <TableCell>
+      <StatusBadge status={purchase.status} />
+    </TableCell>
+    <TableCell className="text-right">
+      <div className="flex flex-wrap items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+        {purchase.status === "DRAFT" && (
+          <>
+            <Button
+              size="icon"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(purchase.id);
+              }}
+              icon={<Icons.Edit className="w-4 h-4" />}
+              className="w-full sm:w-auto"
+              aria-label="Edit purchase"
+              title="Edit"
+            />
+            <Button
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPost(purchase.id);
+              }}
+              disabled={postingId === purchase.id}
+              isLoading={postingId === purchase.id}
+              className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white"
+              icon={<Icons.Check className="w-4 h-4" />}
+            >
+              POST
+            </Button>
+          </>
+        )}
+      </div>
+    </TableCell>
+  </TableRow>
+));
+
+PurchaseRow.displayName = 'PurchaseRow';
+
 export default function PurchaseHistory() {
-  const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [postingId, setPostingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "DRAFT" | "POSTED" | "VOID">("ALL");
+  const debouncedSearch = useDebounce(search, 400);
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "DRAFT" | "POSTED" | "VOID">(
+    (initialStatus && ["DRAFT", "POSTED", "VOID"].includes(initialStatus))
+      ? (initialStatus as "DRAFT" | "POSTED" | "VOID")
+      : "ALL"
+  );
   const [termsFilter, setTermsFilter] = useState<"ALL" | "CASH" | "CREDIT">("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [draftReturnCount, setDraftReturnCount] = useState(0);
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
 
   const { page, setPage, pageSize, range } = usePagination();
-  const [totalCount, setTotalCount] = useState(0);
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
+  }, [debouncedSearch, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
 
-  const fetchPurchases = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
+  const {
+    data: purchaseData,
+    isLoading,
+    isFetching,
+    error: fetchError,
+    refetch: refetchPurchases
+  } = usePurchaseHistoryQuery({
+    range,
+    search: debouncedSearch,
+    statusFilter,
+    termsFilter,
+    dateFrom,
+    dateTo
+  });
 
-    try {
-      let query = supabase
-        .from("purchases")
-        .select(
-          `
-                    id,
-                    purchase_date,
-                    purchase_no,
-                    vendor_id,
-                    terms,
-                    total_amount,
-                    status,
-                    created_at,
-                    vendors (
-                        name
-                    )
-                `,
-          { count: "exact" }
-        )
-        .order("purchase_date", { ascending: false })
-        .order("created_at", { ascending: false });
+  const { data: draftReturnCount = 0, refetch: refetchDraftCount } = usePurchaseReturnDraftCountQuery();
 
-      if (statusFilter !== "ALL") {
-        query = query.eq("status", statusFilter);
-      }
-      if (termsFilter !== "ALL") {
-        query = query.eq("terms", termsFilter);
-      }
-      if (dateFrom) {
-        query = query.gte("purchase_date", dateFrom);
-      }
-      if (dateTo) {
-        query = query.lte("purchase_date", dateTo);
-      }
-      if (search.trim()) {
-        const q = search.trim();
-        query = query.or(`purchase_no.ilike.%${q}%,vendors.name.ilike.%${q}%`);
-      }
-
-      query = query.range(range[0], range[1]);
-
-      const { data, error: fetchError, count } = await query;
-
-      if (fetchError) throw fetchError;
-
-      const enriched =
-        data?.map((purchase) => ({
-          ...purchase,
-          vendor_name: (purchase.vendors as unknown as { name: string })?.name || "Unknown",
-        })) || [];
-
-      setPurchases(enriched);
-      setTotalCount(count || 0);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message || "Failed to fetch purchases");
-      } else if (err && typeof err === "object" && "message" in err) {
-        setError(String((err as { message?: string }).message || "Failed to fetch purchases"));
-      } else {
-        setError("Failed to fetch purchases");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [range, search, statusFilter, termsFilter, dateFrom, dateTo]);
-
-  const fetchReturnDraftCount = useCallback(async () => {
-    try {
-      const { count, error: countError } = await supabase
-        .from("purchase_returns")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "DRAFT");
-      if (countError) throw countError;
-      setDraftReturnCount(count || 0);
-    } catch {
-      setDraftReturnCount(0);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchPurchases();
-    fetchReturnDraftCount();
-  }, [fetchPurchases, fetchReturnDraftCount]);
-
-  async function handlePost(purchaseId: string) {
-    if (
-      !confirm(
-        "Are you sure you want to POST this purchase? This action cannot be undone.",
-      )
-    ) {
-      return;
-    }
+  const handlePost = useCallback(async (purchaseId: string) => {
+    const ok = await confirm({
+      title: "Post Purchase",
+      description: "Are you sure you want to POST this purchase? This action cannot be undone.",
+      confirmText: "POST",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setPostingId(purchaseId);
     setError(null);
     setSuccess(null);
 
     try {
-      const { error: rpcError } = await supabase.rpc("rpc_post_purchase", {
+      const { data, error: rpcError } = await supabase.rpc("rpc_post_purchase", {
         p_purchase_id: purchaseId,
       });
 
@@ -173,7 +197,14 @@ export default function PurchaseHistory() {
         }
       }
 
-      setSuccess("Purchase posted successfully!");
+      const journalSkipped =
+        (data as { journal_skipped?: boolean } | null | undefined)?.journal_skipped ??
+        (Array.isArray(data) ? (data[0] as { journal_skipped?: boolean } | undefined)?.journal_skipped : undefined);
+      setSuccess(
+        journalSkipped
+          ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
+          : "Purchase posted successfully!"
+      );
       navigate(`/purchases/${purchaseId}`);
     } catch (err: unknown) {
       setSuccess(null);
@@ -187,7 +218,15 @@ export default function PurchaseHistory() {
     } finally {
       setPostingId(null);
     }
-  }
+  }, [confirm, navigate]);
+
+  const handleOpen = useCallback((id: string) => navigate(`/purchases/${id}`), [navigate]);
+  const handleEdit = useCallback((id: string) => navigate(`/purchases/${id}/edit`), [navigate]);
+
+  const purchases = purchaseData?.items || [];
+  const totalCount = purchaseData?.count || 0;
+  const loading = isLoading || isFetching;
+  const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? "Failed to fetch purchases" : null;
 
   if (loading) {
     return (
@@ -207,20 +246,24 @@ export default function PurchaseHistory() {
         actions={
           <div className="flex gap-2">
             <Button
-              onClick={fetchPurchases}
+              onClick={() => {
+                refetchPurchases();
+                refetchDraftCount();
+              }}
               variant="outline"
+              size="icon"
               icon={<Icons.Refresh className="w-4 h-4" />}
-            >
-              Refresh
-            </Button>
+              title="Refresh"
+            />
             <Button
               onClick={() => navigate("/purchase-returns/history")}
               variant="outline"
-              icon={<Icons.RotateCw className="w-4 h-4" />}
+              icon={<Icons.RotateCcw className="w-4 h-4" />}
+              className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 hover:border-red-300"
             >
               Return List
               {draftReturnCount > 0 && (
-                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2 py-0.5">
+                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-red-100 text-red-800 border border-red-200 text-[10px] font-semibold px-2 py-0.5">
                   {draftReturnCount}
                 </span>
               )}
@@ -235,7 +278,9 @@ export default function PurchaseHistory() {
         }
       />
 
-      {error && <Alert variant="error" title="Kesalahan" description={error} />}
+      {(fetchErrorMessage || error) && (
+        <Alert variant="error" title="Kesalahan" description={fetchErrorMessage || error || ""} />
+      )}
       {success && (
         <Alert variant="success" title="Sukses" description={success} />
       )}
@@ -342,75 +387,23 @@ export default function PurchaseHistory() {
                     <TableHead>Date</TableHead>
                     <TableHead>Doc No</TableHead>
                     <TableHead>Vendor</TableHead>
-                    <TableHead>Terms</TableHead>
+                    <TableHead>Terms / Payment</TableHead>
                     <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Outstanding</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {purchases.map((purchase) => (
-                    <TableRow
+                  {purchases.map((purchase: PurchaseRecord) => (
+                    <PurchaseRow
                       key={purchase.id}
-                      className="cursor-pointer hover:bg-slate-50"
-                      onClick={() => navigate(`/purchases/${purchase.id}`)}
-                    >
-                      <TableCell>{formatDate(purchase.purchase_date)}</TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {safeDocNo(purchase.purchase_no, purchase.id)}
-                      </TableCell>
-                      <TableCell>{purchase.vendor_name}</TableCell>
-                      <TableCell>
-                        <Badge
-                          className={
-                            purchase.terms === "CASH"
-                              ? "bg-blue-100 text-blue-800"
-                              : "bg-orange-100 text-orange-800"
-                          }
-                        >
-                          {purchase.terms}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatCurrency(purchase.total_amount)}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={purchase.status} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
-                          {purchase.status === "DRAFT" && (
-                            <>
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate(`/purchases/${purchase.id}/edit`);
-                                }}
-                                icon={<Icons.Edit className="w-4 h-4" />}
-                                className="w-full sm:w-auto"
-                                aria-label="Edit purchase"
-                                title="Edit"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePost(purchase.id);
-                                }}
-                                disabled={postingId === purchase.id}
-                                isLoading={postingId === purchase.id}
-                                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white"
-                                icon={<Icons.Check className="w-4 h-4" />}
-                              >
-                                POST
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                      purchase={purchase}
+                      onOpen={handleOpen}
+                      onEdit={handleEdit}
+                      onPost={handlePost}
+                      postingId={postingId}
+                    />
                   ))}
                 </TableBody>
               </Table>

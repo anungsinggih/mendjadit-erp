@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "./ui/Button";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/Table";
 import { Badge } from "./ui/Badge";
 import { Alert } from "./ui/Alert";
 import { Icons } from "./ui/Icons";
+import { StatusBadge } from "./ui/StatusBadge";
 import { formatCurrency, formatDate, safeDocNo } from "../lib/format";
 import DocumentHeaderCard from "./shared/DocumentHeaderCard";
 import LineItemsTable from "./shared/LineItemsTable";
@@ -62,6 +65,25 @@ type RelatedDoc = {
   payment_amount?: number;
 };
 
+type InventoryHistoryRow = {
+  item_id: string | null;
+  item_name: string | null;
+  sku: string | null;
+  size_name?: string | null;
+  color_name?: string | null;
+  qty_change: number | null;
+  trx_date: string | null;
+  ref_no: string | null;
+};
+
+type PurchaseReturnSummary = {
+  id: string;
+  return_date: string;
+  total_amount: number;
+  status: "DRAFT" | "POSTED" | "VOID";
+  return_no?: string | null;
+};
+
 type CompanyBank = {
   id: string;
   code: string;
@@ -78,6 +100,8 @@ export default function PurchaseDetail() {
   const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
   const [items, setItems] = useState<PurchaseItem[]>([]);
   const [relatedDocs, setRelatedDocs] = useState<RelatedDoc>({});
+  const [returns, setReturns] = useState<PurchaseReturnSummary[]>([]);
+  const [inventoryHistory, setInventoryHistory] = useState<InventoryHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentMethodName, setPaymentMethodName] = useState<string | null>(null);
@@ -90,11 +114,12 @@ export default function PurchaseDetail() {
   const [isPosting, setIsPosting] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement | null>(null);
+  const { confirm } = useConfirm();
   const itemsTotal = items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+  const discountAmount = purchase?.discount_amount || 0;
+  const computedTotal = itemsTotal - discountAmount;
   const displayTotal = purchase
-    ? purchase.total_amount > 0
-      ? purchase.total_amount
-      : itemsTotal - (purchase.discount_amount || 0)
+    ? (discountAmount > 0 && purchase.total_amount >= itemsTotal ? computedTotal : (purchase.total_amount || computedTotal))
     : itemsTotal;
 
   useEffect(() => {
@@ -107,6 +132,7 @@ export default function PurchaseDetail() {
   async function fetchPurchaseDetail(purchaseId: string) {
     setLoading(true);
     setError(null);
+    setInventoryHistory([]);
 
     try {
       // Fetch header
@@ -251,7 +277,70 @@ export default function PurchaseDetail() {
         }
 
         setRelatedDocs(related);
+
+        if (!related.journal_id && purchaseData.purchase_no) {
+          const { data: invData, error: invError } = await supabase
+            .from("view_stock_card")
+            .select("item_id, item_name, sku, qty_change, trx_date, ref_no")
+            .eq("trx_type", "PURCHASE")
+            .eq("ref_no", purchaseData.purchase_no);
+          if (!invError) {
+            const baseRows = (invData as InventoryHistoryRow[]) || [];
+            const ids = Array.from(
+              new Set(baseRows.map((row) => row.item_id).filter(Boolean) as string[]),
+            );
+            if (ids.length > 0) {
+              const { data: itemMeta } = await supabase
+                .from("items")
+                .select("id, sizes(name), colors(name)")
+                .in("id", ids);
+              const metaMap = new Map(
+                (itemMeta || []).map((row) => [
+                  row.id,
+                  {
+                    size_name:
+                      (row.sizes as unknown as { name?: string } | null)?.name || null,
+                    color_name:
+                      (row.colors as unknown as { name?: string } | null)?.name || null,
+                  },
+                ]),
+              );
+              setInventoryHistory(
+                baseRows.map((row) => {
+                  const meta = metaMap.get(row.item_id || "");
+                  return {
+                    ...row,
+                    size_name: meta?.size_name ?? row.size_name ?? null,
+                    color_name: meta?.color_name ?? row.color_name ?? null,
+                  };
+                }),
+              );
+            } else {
+              setInventoryHistory(baseRows);
+            }
+          } else {
+            setInventoryHistory([]);
+          }
+        } else {
+          setInventoryHistory([]);
+        }
       }
+
+      // Fetch returns (all statuses)
+      const { data: returnsData, error: returnsError } = await supabase
+        .from("purchase_returns")
+        .select("id, return_date, total_amount, status, return_no")
+        .eq("purchase_id", purchaseId)
+        .order("return_date", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (returnsError) throw returnsError;
+      setReturns(
+        returnsData?.map((ret) => ({
+          ...ret,
+          return_no: ret.return_no || ret.id.substring(0, 8),
+        })) || [],
+      );
     } catch (err: unknown) {
       setError(getErrorMessageLocal(err));
     } finally {
@@ -271,8 +360,14 @@ export default function PurchaseDetail() {
 
   async function handleDeleteDraft() {
     if (!purchase) return;
-    if (!confirm("Hapus draft ini? Tindakan ini tidak bisa dibatalkan."))
-      return;
+    const ok = await confirm({
+      title: "Delete Draft Purchase",
+      description: "Hapus draft ini? Tindakan ini tidak bisa dibatalkan.",
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setIsDeleting(true);
     setDeleteError(null);
@@ -292,20 +387,21 @@ export default function PurchaseDetail() {
 
   async function handlePost() {
     if (!purchase) return;
-    if (
-      !confirm(
-        "Are you sure you want to POST this purchase? This action cannot be undone.",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Post Purchase",
+      description: "Are you sure you want to POST this purchase? This action cannot be undone.",
+      confirmText: "POST",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setIsPosting(true);
     setPostError(null);
     setPostSuccess(null);
 
     try {
-      const { error: rpcError } = await supabase.rpc("rpc_post_purchase", {
+      const { data, error: rpcError } = await supabase.rpc("rpc_post_purchase", {
         p_purchase_id: purchase.id,
       });
 
@@ -317,7 +413,14 @@ export default function PurchaseDetail() {
         }
       }
 
-      setPostSuccess("Purchase posted successfully!");
+      const journalSkipped =
+        (data as { journal_skipped?: boolean } | null | undefined)?.journal_skipped ??
+        (Array.isArray(data) ? (data[0] as { journal_skipped?: boolean } | undefined)?.journal_skipped : undefined);
+      setPostSuccess(
+        journalSkipped
+          ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
+          : "Purchase posted successfully!"
+      );
       fetchPurchaseDetail(purchase.id);
     } catch (err: unknown) {
       if (err instanceof Error) setPostError(err.message || "Failed to post purchase");
@@ -472,16 +575,17 @@ export default function PurchaseDetail() {
     },
     {
       label: "Item Name",
-      render: (item: PurchaseItem) => (
-        <div>
-          <div>{item.item_name}</div>
-          {(item.size_name || item.color_name) && (
-            <div className="text-xs text-gray-500">
-              {[item.size_name, item.color_name].filter(Boolean).join(" • ")}
-            </div>
-          )}
-        </div>
-      ),
+      render: (item: PurchaseItem) => item.item_name,
+    },
+    {
+      label: "Size",
+      cellClassName: "text-sm text-gray-600",
+      render: (item: PurchaseItem) => item.size_name || '-',
+    },
+    {
+      label: "Color",
+      cellClassName: "text-sm text-gray-600",
+      render: (item: PurchaseItem) => item.color_name || '-',
     },
     {
       label: "UoM",
@@ -570,6 +674,34 @@ export default function PurchaseDetail() {
         iconClassName: "text-green-500",
       });
     }
+    if (!relatedDocs.journal_id && inventoryHistory.length > 0) {
+      relatedItems.push({
+        id: `inv-${purchase.id}`,
+        title: "Inventory History (FG)",
+        description: (
+          <div className="space-y-1">
+            <p>Stock masuk tercatat di inventory.</p>
+            <ul className="text-xs text-gray-500 space-y-0.5">
+              {inventoryHistory.slice(0, 3).map((row) => {
+                const variant = [row.size_name, row.color_name].filter(Boolean).join(" • ");
+                return (
+                  <li key={`${row.item_id}-${row.sku}`}>
+                    {row.sku} {row.item_name}
+                    {variant ? ` (${variant})` : ""} (+{row.qty_change || 0})
+                  </li>
+                );
+              })}
+              {inventoryHistory.length > 3 && (
+                <li>+{inventoryHistory.length - 3} items lainnya</li>
+              )}
+            </ul>
+          </div>
+        ),
+        icon: <Icons.Package className="w-5 h-5" />,
+        toneClassName: "bg-slate-50",
+        iconClassName: "text-slate-600",
+      });
+    }
   }
 
   return (
@@ -585,7 +717,7 @@ export default function PurchaseDetail() {
               purchase.terms === "CREDIT" &&
               relatedDocs.ap_status !== "PAID" && (
                 <Button
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                  variant="success"
                   onClick={() => {
                     if (relatedDocs.ap_bill_id) {
                       navigate(`/finance?ap=${relatedDocs.ap_bill_id}`);
@@ -613,7 +745,7 @@ export default function PurchaseDetail() {
             {purchase.status === "POSTED" && (
               <Button
                 onClick={() => navigate(`/purchase-return?purchase=${purchase.id}`)}
-                variant="outline"
+                variant="primary"
                 icon={<Icons.Plus className="w-4 h-4" />}
               >
                 Create Return
@@ -631,7 +763,7 @@ export default function PurchaseDetail() {
                 onClick={handlePost}
                 disabled={isPosting}
                 isLoading={isPosting}
-                className="bg-green-600 hover:bg-green-700 text-white"
+                variant="success"
                 icon={<Icons.Check className="w-4 h-4" />}
               >
                 POST
@@ -640,6 +772,7 @@ export default function PurchaseDetail() {
             {purchase.status === "DRAFT" && (
               <Button
                 onClick={() => navigate(`/purchases/${purchase.id}/edit`)}
+                variant="primary"
                 icon={<Icons.Edit className="w-4 h-4" />}
               >
                 Edit
@@ -776,6 +909,56 @@ export default function PurchaseDetail() {
               </CardContent>
             </Card>
 
+            {Array.isArray(returns) && returns.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Returns</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Return No</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {returns.map((ret) => {
+                          const returnNo = ret.return_no || safeDocNo(null, ret.id);
+                          return (
+                            <TableRow key={ret.id}>
+                              <TableCell>{formatDate(ret.return_date)}</TableCell>
+                              <TableCell className="font-mono text-sm">{returnNo}</TableCell>
+                              <TableCell className="text-right font-medium">
+                                {formatCurrency(ret.total_amount)}
+                              </TableCell>
+                              <TableCell>
+                                <StatusBadge status={ret.status} />
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  onClick={() => navigate(`/purchase-returns/${ret.id}`)}
+                                  icon={<Icons.Eye className="w-4 h-4" />}
+                                  aria-label="View Return"
+                                  title="View"
+                                />
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {purchase.status === "POSTED" && (
               <RelatedDocumentsCard items={relatedItems} />
             )}
@@ -794,7 +977,7 @@ export default function PurchaseDetail() {
             purchase_date: purchase.purchase_date,
             vendor_name: purchase.vendor_name,
             terms: purchase.terms,
-            total_amount: purchase.total_amount,
+            total_amount: displayTotal,
             discount_amount: purchase.discount_amount,
             notes: purchase.notes,
             payment_method_code: purchase.payment_method_code

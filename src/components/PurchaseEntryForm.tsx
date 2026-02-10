@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -7,11 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "./ui/Card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/Table";
 import { Textarea } from "./ui/Textarea";
 import { Icons } from "./ui/Icons";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { TotalFooter } from "./ui/TotalFooter";
-// import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
-// import VendorForm from "./VendorForm"; 
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
+import VendorForm from "./VendorForm";
 import { Combobox } from "./ui/Combobox";
+import { Badge } from "./ui/Badge";
 
 type Vendor = {
     id: string;
@@ -19,20 +21,22 @@ type Vendor = {
     phone: string;
     address: string;
     is_active: boolean;
+    vendor_type?: 'SUPPLIER' | 'KONVEKSI' | 'INTERNAL';
 };
 
-type Item = {
-    id: string;
-    name: string;
-    sku: string;
-    uom: string;
-    default_price_buy: number;
-    type: string; // Added type for filtering
-};
+import { ITEM_TYPES } from "../lib/constants";
+import type { Item } from "../types/shared";
+
+// Local extensions if needed, or just rely on shared type
+// For PurchaseEntryForm we might need specific fields, let's check.
+// The shared type has what we need.
+
 type PurchaseLine = {
     item_id: string;
     item_name: string;
     sku: string;
+    size_name?: string;
+    color_name?: string;
     uom: string;
     qty: number;
     cost_price: number;
@@ -50,16 +54,21 @@ type Props = {
 export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave = true, initialPurchaseId }: Props) {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
+    const { confirm } = useConfirm();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [items, setItems] = useState<Item[]>([]);
     const [loading, setLoading] = useState(false);
+
+    // Vendor Modal States
+    const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+    const [isEditVendorModalOpen, setIsEditVendorModalOpen] = useState(false);
 
     // Form State
     const [vendorId, setVendorId] = useState("");
     const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split("T")[0]);
     const [terms, setTerms] = useState<"CASH" | "CREDIT">("CASH");
     const [paymentMethods, setPaymentMethods] = useState<{ code: string; name: string }[]>([]);
-    const [paymentMethodCode, setPaymentMethodCode] = useState("CASH");
+    const [paymentMethodCode, setPaymentMethodCode] = useState("");
     const [notes, setNotes] = useState("");
     const [discountAmount, setDiscountAmount] = useState(0);
     const [lines, setLines] = useState<PurchaseLine[]>([]);
@@ -68,7 +77,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
     const [selectedItemId, setSelectedItemId] = useState("");
     const [costPrice, setCostPrice] = useState<number | null>(null);
     const [qty, setQty] = useState(1);
-    const [itemFilter, setItemFilter] = useState<"ALL" | "RAW_MATERIAL" | "TRADED">("ALL");
+    const [itemFilter, setItemFilter] = useState<"ALL" | keyof typeof ITEM_TYPES>("ALL");
 
     // Refs for Accessibility
     // const itemSelectRef = useRef<HTMLButtonElement>(null); // Replaced by Combobox
@@ -108,12 +117,12 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         try {
             const { data: venData, error: venError } = await supabase
                 .from("vendors")
-                .select("id, name, phone, address, is_active")
+                .select("id, name, phone, address, is_active, vendor_type")
                 .eq("is_active", true);
             if (venError) throw venError;
             const { data: itemData, error: itemError } = await supabase
                 .from("items")
-                .select("id, name, sku, uom, default_price_buy, type") // Added type column
+                .select("id, name, sku, uom, default_price_buy, type, sizes(name), colors(name)")
                 .eq("is_active", true);
             if (itemError) throw itemError;
 
@@ -125,12 +134,33 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
             if (methodError) throw methodError;
 
             setVendors((venData as unknown as Vendor[]) || []);
-            setItems(itemData || []);
+
+
+            const mappedItems = (itemData || []).map((item) => ({
+                ...item,
+                size_name: (item.sizes as unknown as { name: string } | null)?.name,
+                color_name: (item.colors as unknown as { name: string } | null)?.name,
+            }));
+
+            setItems((mappedItems as unknown as Item[]) || []);
             setPaymentMethods(methodData || []);
         } catch (err: unknown) {
             onError(getErrorMessage(err)); // Fixed argument count
         }
     }, [onError]);
+
+    // Vendor Modal Handlers
+    const handleVendorCreated = async () => {
+        setIsVendorModalOpen(false);
+        onSuccess("Vendor created successfully!");
+        await fetchMasterData();
+    };
+
+    const handleVendorUpdated = async () => {
+        setIsEditVendorModalOpen(false);
+        onSuccess("Vendor updated successfully!");
+        await fetchMasterData();
+    };
 
     useEffect(() => {
         fetchMasterData();
@@ -163,7 +193,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 setVendorId(purchaseData.vendor_id);
                 setPurchaseDate(purchaseData.purchase_date);
                 setTerms(purchaseData.terms);
-                setPaymentMethodCode(purchaseData.payment_method_code || "CASH");
+                setPaymentMethodCode(purchaseData.payment_method_code || "");
                 setNotes(purchaseData.notes || "");
                 setDiscountAmount(Number(purchaseData.discount_amount) || 0);
 
@@ -178,7 +208,9 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                         uom_snapshot,
                         items (
                             name,
-                            sku
+                            sku,
+                            sizes ( name ),
+                            colors ( name )
                         )
                     `
                     )
@@ -189,10 +221,14 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 const loadedLines: PurchaseLine[] =
                     itemsData?.map((item) => {
                         const iData = Array.isArray(item.items) ? item.items[0] : item.items;
+                        const sizeName = (iData as { sizes?: { name?: string } })?.sizes?.name;
+                        const colorName = (iData as { colors?: { name?: string } })?.colors?.name;
                         return {
                             item_id: item.item_id,
                             item_name: iData?.name || "Unknown",
                             sku: iData?.sku || "",
+                            size_name: sizeName,
+                            color_name: colorName,
                             uom: item.uom_snapshot,
                             qty: item.qty,
                             cost_price: item.unit_cost,
@@ -215,13 +251,8 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
     useEffect(() => {
         if (terms === "CREDIT") {
             setPaymentMethodCode("");
-            return;
         }
-        if (!paymentMethodCode) {
-            const hasCash = paymentMethods.some((m) => m.code === "CASH");
-            setPaymentMethodCode(hasCash ? "CASH" : paymentMethods[0]?.code || "");
-        }
-    }, [terms, paymentMethods, paymentMethodCode]);
+    }, [terms]);
 
     const parseQtyValue = (value: string) => {
         const parsed = parseInt(value, 10);
@@ -235,22 +266,71 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         return Math.max(0, parsed);
     };
 
+    const selectedVendor = vendors.find((v) => v.id === vendorId);
+    const vendorType = selectedVendor?.vendor_type || 'SUPPLIER';
+    const isProductionVendor = vendorType === 'KONVEKSI' || vendorType === 'INTERNAL';
+    const vendorTypeLabel = vendorType === 'KONVEKSI' ? 'Konveksi' : vendorType === 'INTERNAL' ? 'Internal' : 'Supplier';
+    const allowedItemTypes: Array<"ALL" | keyof typeof ITEM_TYPES> = isProductionVendor
+        ? [ITEM_TYPES.FINISHED_GOOD]
+        : ["ALL", ITEM_TYPES.RAW_MATERIAL, ITEM_TYPES.TRADED, ITEM_TYPES.FINISHED_GOOD];
+
+    useEffect(() => {
+        if (!vendorId) return;
+        if (isProductionVendor) {
+            if (itemFilter !== ITEM_TYPES.FINISHED_GOOD) {
+                setItemFilter(ITEM_TYPES.FINISHED_GOOD);
+            }
+            if (selectedItemId) {
+                const item = items.find((i) => i.id === selectedItemId);
+                if (item && item.type !== ITEM_TYPES.FINISHED_GOOD) {
+                    setSelectedItemId("");
+                    setCostPrice(null);
+                }
+            }
+        }
+    }, [vendorId, isProductionVendor, itemFilter, selectedItemId, items]);
+
     function addItem() {
         if (!selectedItemId) return;
         const item = items.find((i) => i.id === selectedItemId);
         if (!item) return;
+        if (isProductionVendor && item.type !== ITEM_TYPES.FINISHED_GOOD) {
+            void confirm({
+                title: "Invalid Item Type",
+                description: "Vendor Konveksi/Internal hanya untuk barang jadi (FG).",
+                confirmText: "OK",
+                hideCancel: true,
+            });
+            return;
+        }
         if (costPrice === null || costPrice < 0) { // Check for null
-            alert("Cost must be >= 0");
+            void confirm({
+                title: "Invalid Cost",
+                description: "Cost must be >= 0.",
+                confirmText: "OK",
+                hideCancel: true,
+            });
             return;
         }
 
         const safeQty = Math.max(1, qty);
         const safeCost = Math.max(0, costPrice);
+        if (item.type !== ITEM_TYPES.FINISHED_GOOD && safeCost === 0) {
+            void confirm({
+                title: "Invalid Cost",
+                description: "Cost tidak boleh 0 untuk RAW MATERIAL / TRADED.",
+                confirmText: "OK",
+                hideCancel: true,
+            });
+            return;
+        }
 
         const newLine: PurchaseLine = {
             item_id: item.id,
             item_name: item.name,
             sku: item.sku,
+            size_name: item.size_name,
+            color_name: item.color_name,
             uom: item.uom,
             qty: safeQty,
             cost_price: safeCost,
@@ -286,8 +366,11 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         setLines(lines.filter((_, i) => i !== index));
     }
 
-    const itemsTotal = lines.reduce((sum, l) => sum + l.subtotal, 0);
-    const totalAmount = itemsTotal - (discountAmount || 0);
+    const itemsTotal = useMemo(() => lines.reduce((sum, l) => sum + l.subtotal, 0), [lines]);
+    const totalAmount = useMemo(
+        () => itemsTotal - (discountAmount || 0),
+        [itemsTotal, discountAmount]
+    );
 
     const handleSaveDraft = useCallback(async () => {
         if (!vendorId) {
@@ -387,15 +470,16 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                     subtotal: l.subtotal,
                     uom_snapshot: l.uom,
                 }));
-                const { error: linesError } = await supabase
-                    .from("purchase_items")
-                    .insert(lineData);
-                if (linesError) throw linesError;
+                const { error: rpcError } = await supabase.rpc('rpc_update_purchase_draft_items', {
+                    p_purchase_id: purId,
+                    p_items: lineData
+                });
+                if (rpcError) throw rpcError;
 
                 setLines([]);
                 setVendorId("");
                 setTerms("CASH");
-                setPaymentMethodCode("CASH");
+                setPaymentMethodCode("");
                 setNotes("");
                 setDiscountAmount(0);
                 onSuccess(`Draft Created! ID: ${purId}`);
@@ -473,14 +557,76 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 }}>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-1 space-y-4">
-                            <Combobox
-                                label="Vendor"
-                                value={vendorId}
-                                onChange={(val) => setVendorId(val)}
-                                placeholder="-- Select Vendor --"
-                                searchPlaceholder="Search vendor..."
-                                options={vendors.map((v) => ({ label: v.name, value: v.id }))}
-                            />
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="text-sm font-medium text-[var(--text-main)]">Vendor</label>
+                                    <div className="flex gap-2">
+                                        {vendorId && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsEditVendorModalOpen(true)}
+                                                className="text-xs text-orange-600 hover:text-orange-800 font-medium flex items-center gap-1"
+                                            >
+                                                <Icons.Edit className="w-3 h-3" />
+                                                Edit
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsVendorModalOpen(true)}
+                                            className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                                        >
+                                            <Icons.Plus className="w-3 h-3" />
+                                            New
+                                        </button>
+                                    </div>
+                                </div>
+                                <Combobox
+                                    containerClassName="mb-3"
+                                    value={vendorId}
+                                    onChange={(val) => setVendorId(val)}
+                                    placeholder="-- Select Vendor --"
+                                    searchPlaceholder="Search vendor..."
+                                    options={vendors.map((v) => ({
+                                        label: v.name,
+                                        value: v.id,
+                                        keywords: [v.name, v.phone],
+                                        content: (
+                                            <div className="flex flex-col">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-medium">{v.name}</span>
+                                                    {v.vendor_type && (
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={`text-xs ${v.vendor_type === 'SUPPLIER' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                                                v.vendor_type === 'KONVEKSI' ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                                                                    'bg-green-50 text-green-700 border-green-200'
+                                                                }`}
+                                                        >
+                                                            {v.vendor_type}
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                                {(v.phone || v.address) && (
+                                                    <span className="text-xs text-gray-500 truncate">
+                                                        {[v.phone, v.address].filter(Boolean).join(" • ")}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )
+                                    }))}
+                                />
+                                {vendorId && (
+                                    <div className="text-xs text-slate-500">
+                                        Vendor type: <span className="font-medium text-slate-700">{vendorTypeLabel}</span>
+                                        {isProductionVendor ? (
+                                            <span className="ml-1">• hanya FG, cost otomatis 0</span>
+                                        ) : (
+                                            <span className="ml-1">• RAW/TRADED wajib isi cost</span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                             <Input
                                 label="Date"
                                 type="date"
@@ -537,7 +683,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                             <div className="flex justify-between items-center">
                                                 <label className="text-sm font-medium text-[var(--text-main)]">Product (F4)</label>
                                                 <div className="flex bg-gray-100 p-0.5 rounded-lg">
-                                                    {(["ALL", "RAW_MATERIAL", "TRADED"] as const).map(type => (
+                                                    {allowedItemTypes.map(type => (
                                                         <button
                                                             key={type}
                                                             type="button"
@@ -551,47 +697,67 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                                                 : "text-gray-400 hover:text-gray-600"
                                                                 }`}
                                                         >
-                                                            {type === "RAW_MATERIAL" ? "RAW" : type}
+                                                            {type === ITEM_TYPES.RAW_MATERIAL ? "RAW" : type === ITEM_TYPES.FINISHED_GOOD ? "FG" : type}
                                                         </button>
                                                     ))}
                                                 </div>
                                             </div>
-                                            <Combobox
-                                                value={selectedItemId}
-                                                onChange={(val) => {
-                                                    const newItemId = val;
-                                                    setSelectedItemId(newItemId);
+                                        </div>
+                                        <Combobox
+                                            value={selectedItemId}
+                                            onChange={(val) => {
+                                                const newItemId = val;
+                                                setSelectedItemId(newItemId);
 
-                                                    // Auto-fill cost price if enabled
-                                                    if (newItemId) {
-                                                        const item = items.find((i) => i.id === newItemId);
-                                                        if (item) {
-                                                            setCostPrice(item.default_price_buy || 0);
-                                                        }
-
-                                                        // Auto focus to Cost Price
-                                                        setTimeout(() => costInputRef.current?.focus(), 0);
+                                                // Auto-fill cost price if enabled
+                                                if (newItemId) {
+                                                    const item = items.find((i) => i.id === newItemId);
+                                                    if (item) {
+                                                        const isFG = item.type === ITEM_TYPES.FINISHED_GOOD;
+                                                        setCostPrice(isFG ? 0 : (item.default_price_buy || 0));
                                                     }
-                                                }}
-                                                placeholder="Select Item..."
-                                                searchPlaceholder="Search User, SKU or Name..."
-                                                options={items
-                                                    .filter(i => itemFilter === "ALL" ? true : i.type === itemFilter)
-                                                    .map((i) => ({
-                                                        label: `${i.sku} - ${i.name}`,
+
+                                                    // Auto focus to Cost Price
+                                                    setTimeout(() => costInputRef.current?.focus(), 0);
+                                                }
+                                            }}
+                                            placeholder="Select Item..."
+                                            searchPlaceholder="Search User, SKU or Name..."
+                                            options={items
+                                                .filter(i => itemFilter === "ALL" ? true : i.type === itemFilter)
+                                                .map((i) => {
+                                                    // Safe access for mapped props
+                                                    const size = i.size_name;
+                                                    const color = i.color_name;
+                                                    const variantLabel = [size, color].filter(Boolean).join(", ");
+                                                    const stockQty = i.stock_qty ?? 0;
+
+                                                    return {
+                                                        label: `${i.sku} - ${i.name}${variantLabel ? ` (${variantLabel})` : ''}`,
                                                         value: i.id,
                                                         keywords: [i.sku, i.name],
                                                         content: (
                                                             <div className="flex justify-between w-full">
-                                                                <span><span className="font-mono text-gray-500 mr-2">{i.sku}</span>{i.name}</span>
+                                                                <span>
+                                                                    <span className="font-mono text-gray-500 mr-2">{i.sku}</span>
+                                                                    {i.name}
+                                                                    {variantLabel && (
+                                                                        <span className="ml-1 text-slate-500 text-xs">
+                                                                            ({variantLabel})
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                                <span className={`text-xs ${Number(stockQty) <= 0 ? 'text-red-500' : 'text-green-600'}`}>
+                                                                    Stock: {stockQty}
+                                                                </span>
                                                             </div>
                                                         )
-                                                    }))}
-                                                className="!mb-0"
-                                            />
-                                        </div>
+                                                    };
+                                                })}
+                                            className="!mb-0"
+                                        />
                                     </div>
-                                    <div className="w-24">
+                                    <div className="w-28">
                                         <Input
                                             label="Qty"
                                             type="number"
@@ -601,11 +767,18 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                             step={1}
                                             onFocus={(e) => e.target.select()}
                                             onChange={(e) => setQty(parseQtyValue(e.target.value))}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    addItem();
+                                                }
+                                            }}
                                             containerClassName="!mb-0"
                                         />
                                     </div>
-                                    <div className="w-32">
+                                    <div className="w-36">
                                         <Input
+                                            ref={costInputRef}
                                             label="Cost Price"
                                             type="number"
                                             inputMode="decimal"
@@ -617,7 +790,21 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                             onChange={(e) =>
                                                 setCostPrice(parseCostValue(e.target.value))
                                             }
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    addItem();
+                                                }
+                                            }}
                                             containerClassName="!mb-0"
+                                            readOnly={(() => {
+                                                const item = items.find(i => i.id === selectedItemId);
+                                                return item?.type === ITEM_TYPES.FINISHED_GOOD;
+                                            })()}
+                                            className={(() => {
+                                                const item = items.find(i => i.id === selectedItemId);
+                                                return item?.type === ITEM_TYPES.FINISHED_GOOD ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "";
+                                            })()}
                                         />
                                     </div>
                                     <div className="">
@@ -630,67 +817,111 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                             Add Item
                                         </Button>
                                     </div>
-                                </div >
-                            </div >
+                                </div>
+                                {selectedItemId && (() => {
+                                    const selectedItem = items.find(i => i.id === selectedItemId);
+                                    const existingQty = lines
+                                        .filter(l => l.item_id === selectedItemId)
+                                        .reduce((sum, l) => sum + l.qty, 0);
+
+                                    const isFG = selectedItem?.type === ITEM_TYPES.FINISHED_GOOD;
+                                    const masterCost = selectedItem?.default_price_buy ?? 0;
+                                    const isCostChanged = costPrice !== null && costPrice !== masterCost && !isFG;
+
+                                    return (
+                                        <div className="mt-2 space-y-1">
+                                            <div className="text-xs text-gray-500">
+                                                Stok tersedia: {selectedItem?.stock_qty ?? 0} • Qty di cart: {existingQty} • Qty input: {qty}
+                                            </div>
+                                            {isCostChanged && (
+                                                <div className="text-xs text-orange-600 bg-orange-50 p-1.5 rounded border border-orange-100 flex gap-1 items-start">
+                                                    <Icons.Warning className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                                                    <span>
+                                                        Harga berbeda dari master ({masterCost.toLocaleString()}).
+                                                        Master data akan diupdate otomatis saat simpan.
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {isFG && (
+                                                <div className="text-xs text-blue-600 bg-blue-50 p-1.5 rounded border border-blue-100">
+                                                    Info: Item barang jadi (FG) cost otomatis 0.
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
 
                             <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                                <Table>
-                                    <TableHeader className="bg-gray-50">
-                                        <TableRow>
-                                            <TableHead>Item</TableHead>
-                                            <TableHead>Qty</TableHead>
-                                            <TableHead>Cost</TableHead>
-                                            <TableHead>Subtotal</TableHead>
-                                            <TableHead className="w-10">&nbsp;</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {lines.length === 0 ? (
+                                <div className="max-h-[420px] overflow-y-auto">
+                                    <Table>
+                                        <TableHeader className="bg-gray-50">
                                             <TableRow>
-                                                <TableCell
-                                                    colSpan={5}
-                                                    className="text-center text-gray-400 py-8 italic bg-gray-50/30"
-                                                >
-                                                    No items added to cart
-                                                </TableCell>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Size</TableHead>
+                                                <TableHead>Color</TableHead>
+                                                <TableHead>Qty</TableHead>
+                                                <TableHead>Cost</TableHead>
+                                                <TableHead>Subtotal</TableHead>
+                                                <TableHead className="w-10">&nbsp;</TableHead>
                                             </TableRow>
-                                        ) : (
-                                            lines.map((l, i) => (
-                                                <TableRow key={i} className="hover:bg-gray-50/50">
-                                                    <TableCell className="font-medium text-gray-900">
-                                                        {l.item_name}
-                                                        <div className="text-xs text-gray-500">{l.sku}</div>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {l.qty}{" "}
-                                                        <span className="text-xs text-gray-500">
-                                                            {l.uom}
-                                                        </span>
-                                                    </TableCell>
-                                                    <TableCell>{l.cost_price.toLocaleString()}</TableCell>
-                                                    <TableCell className="font-semibold">
-                                                        {l.subtotal.toLocaleString()}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <button
-                                                            className="text-gray-400 hover:text-red-600 transition-colors"
-                                                            onClick={() => removeLine(i)}
-                                                        >
-                                                            <Icons.Trash className="w-4 h-4" />
-                                                        </button>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {lines.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell
+                                                        colSpan={7}
+                                                        className="text-center text-gray-400 py-8 italic bg-gray-50/30"
+                                                    >
+                                                        No items added to cart
                                                     </TableCell>
                                                 </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                                <TotalFooter label="Items Total" amount={itemsTotal} />
-                                <TotalFooter label="Diskon" amount={discountAmount || 0} />
-                                <TotalFooter label="Total Amount" amount={totalAmount} amountClassName="text-purple-600" />
+                                            ) : (
+                                                lines.map((l, i) => (
+                                                    <TableRow key={i} className="hover:bg-gray-50/50">
+                                                        <TableCell className="font-medium text-gray-900">
+                                                            {l.item_name}
+                                                            <div className="text-xs text-gray-500">{l.sku}</div>
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-gray-600">
+                                                            {l.size_name || '-'}
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-gray-600">
+                                                            {l.color_name || '-'}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {l.qty}{" "}
+                                                            <span className="text-xs text-gray-500">
+                                                                {l.uom}
+                                                            </span>
+                                                        </TableCell>
+                                                        <TableCell>{l.cost_price.toLocaleString()}</TableCell>
+                                                        <TableCell className="font-semibold">
+                                                            {l.subtotal.toLocaleString()}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <button
+                                                                className="text-gray-400 hover:text-red-600 transition-colors"
+                                                                onClick={() => removeLine(i)}
+                                                            >
+                                                                <Icons.Trash className="w-4 h-4" />
+                                                            </button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                                <div className="bg-white">
+                                    <TotalFooter label="Items Total" amount={itemsTotal} />
+                                    <TotalFooter label="Diskon" amount={discountAmount || 0} />
+                                    <TotalFooter label="Total Amount" amount={totalAmount} amountClassName="text-purple-600" />
+                                </div>
                             </div>
-                        </div >
-                    </div >
-                </CardContent >
+                        </div>
+                    </div>
+                </CardContent>
                 <CardFooter className="bg-gray-50 border-t border-gray-100 p-4 hidden md:flex">
                     <Button
                         onClick={handleSaveDraft}
@@ -701,7 +932,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                         {loading ? "Saving..." : "Save Draft"}
                     </Button>
                 </CardFooter>
-            </Card >
+            </Card>
 
             <div className="md:hidden fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur px-4 py-3 shadow-lg">
                 <Button
@@ -713,6 +944,31 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                     Save Draft
                 </Button>
             </div>
+
+            <Dialog isOpen={isVendorModalOpen} onClose={() => setIsVendorModalOpen(false)}>
+                <DialogHeader>
+                    <DialogTitle>New Vendor</DialogTitle>
+                </DialogHeader>
+                <DialogContent>
+                    <VendorForm
+                        onSuccess={handleVendorCreated}
+                        onCancel={() => setIsVendorModalOpen(false)}
+                    />
+                </DialogContent>
+            </Dialog>
+
+            <Dialog isOpen={isEditVendorModalOpen} onClose={() => setIsEditVendorModalOpen(false)}>
+                <DialogHeader>
+                    <DialogTitle>Edit Vendor</DialogTitle>
+                </DialogHeader>
+                <DialogContent>
+                    <VendorForm
+                        initialData={vendors.find(v => v.id === vendorId)}
+                        onSuccess={handleVendorUpdated}
+                        onCancel={() => setIsEditVendorModalOpen(false)}
+                    />
+                </DialogContent>
+            </Dialog>
         </>
     );
 }

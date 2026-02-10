@@ -4,6 +4,7 @@ import { Button } from './ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/Dialog'
 import { Icons } from './ui/Icons'
 import * as XLSX from 'xlsx'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 type ImportDialogProps = {
     isOpen: boolean
@@ -19,6 +20,7 @@ export function ItemImportDialog({ isOpen, onClose, onSuccess }: ImportDialogPro
     const [preview, setPreview] = useState<PreviewRow[]>([])
     const [error, setError] = useState<string | null>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const { confirm } = useConfirm()
 
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -59,7 +61,12 @@ export function ItemImportDialog({ isOpen, onClose, onSuccess }: ImportDialogPro
 
             if (error) throw error
 
-            alert(`Import successful! Processed: ${data.processed}, Inserted/Updated: ${data.inserted_or_updated}`)
+            void confirm({
+                title: 'Import Success',
+                description: `Processed: ${data.processed}. Inserted/Updated: ${data.inserted_or_updated}.`,
+                confirmText: 'OK',
+                hideCancel: true
+            })
             onSuccess()
             onClose()
         } catch (err: unknown) {

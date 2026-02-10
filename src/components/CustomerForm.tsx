@@ -5,15 +5,9 @@ import { Input } from './ui/Input'
 import { Select } from './ui/Select'
 import { Switch } from './ui/Switch'
 import { Textarea } from './ui/Textarea'
+import type { Customer as SharedCustomer } from '../types/shared'
 
-export type Customer = {
-    id: string
-    name: string
-    phone: string
-    address: string
-    customer_type: 'UMUM' | 'KHUSUS' | 'CUSTOM'
-    is_active: boolean
-}
+export type Customer = SharedCustomer
 
 interface CustomerFormProps {
     initialData?: Customer | null
@@ -69,8 +63,8 @@ export default function CustomerForm({ initialData, onSuccess, onCancel }: Custo
             {error && <div className="p-2 bg-red-50 text-red-700 text-sm rounded border border-red-200">{error}</div>}
 
             <Input label="Name" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required placeholder="Company or Person Name" />
-            <Input label="Phone" value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="Optional" />
-            <Textarea label="Address" value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} placeholder="Full Address" />
+            <Input label="Phone" value={formData.phone ?? ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="Optional" />
+            <Textarea label="Address" value={formData.address ?? ''} onChange={e => setFormData({ ...formData, address: e.target.value })} placeholder="Full Address" />
 
             <Select
                 label="Customer Type"

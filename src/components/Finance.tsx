@@ -4,7 +4,7 @@ import { PageHeader } from "./ui/PageHeader";
 // import { Card, CardContent } from "./ui/Card";
 import { Alert } from "./ui/Alert";
 import { Icons } from "./ui/Icons";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
 
 // Sub-components
@@ -15,6 +15,7 @@ import { FinancePaymentForm } from "./FinancePaymentForm";
 
 export default function Finance() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -89,6 +90,7 @@ export default function Finance() {
     const params = new URLSearchParams(location.search);
     const arId = params.get("ar");
     const apId = params.get("ap");
+    const tabParam = params.get("tab");
 
     if (arId) {
       handleTabChange("AR");
@@ -96,6 +98,14 @@ export default function Finance() {
     } else if (apId) {
       handleTabChange("AP");
       setInitialApId(apId);
+    } else if (tabParam === "AP") {
+      handleTabChange("AP");
+    } else if (tabParam === "AR") {
+      handleTabChange("AR");
+    } else {
+      // Clear initials if URL params are gone
+      setInitialArId(null);
+      setInitialApId(null);
     }
   }, [location.search]);
 
@@ -190,6 +200,9 @@ export default function Finance() {
     setSelectedAmount(0);
     setRefreshTrigger(prev => prev + 1); // Trigger List Refresh
     setFormOpen(false);
+
+    // Clear URL params on success too
+    navigate(location.pathname, { replace: true });
   }
 
   function handleError(msg: string) {
@@ -209,6 +222,9 @@ export default function Finance() {
     setFormOpen(false);
     setSelectedId("");
     setSelectedAmount(0);
+
+    // Clear URL params to prevent re-opening if it was deep linked
+    navigate(location.pathname, { replace: true });
   }
 
   return (

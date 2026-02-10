@@ -281,15 +281,15 @@ export default function Dashboard({ isOwner }: { isOwner: boolean }) {
                     <div className="flex items-center gap-2">
                         <Button
                             variant="outline"
+                            size="icon"
                             onClick={() => setRefreshTrigger(p => p + 1)}
                             icon={<Icons.Refresh className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />}
                             disabled={loading}
-                        >
-                            Refresh
-                        </Button>
+                            title="Refresh"
+                        />
                         <div className="h-6 w-px bg-gray-200 mx-1 hidden sm:block"></div>
-                        <Button onClick={() => navigate('/sales')} icon={<Icons.Plus className="w-4 h-4" />}>New Sale</Button>
-                        <Button onClick={() => navigate('/purchases')} variant="outline" icon={<Icons.Package className="w-4 h-4" />}>New Purchase</Button>
+                        <Button onClick={() => navigate('/sales')} variant="success" icon={<Icons.Plus className="w-4 h-4" />}>New Sale</Button>
+                        <Button onClick={() => navigate('/purchases')} variant="primary" icon={<Icons.Package className="w-4 h-4" />}>New Purchase</Button>
                     </div>
                 }
             />
@@ -310,7 +310,7 @@ export default function Dashboard({ isOwner }: { isOwner: boolean }) {
                                 <p className="text-xs text-orange-700 mt-1 mb-3 leading-relaxed">
                                     Drafts older than 48 hours detected. Finalize or delete to keep inventory accurate.
                                 </p>
-                                <Button size="sm" variant="outline" className="bg-white border-orange-200 text-orange-700 h-7 text-xs hover:bg-orange-100 w-full sm:w-auto" onClick={() => navigate('/sales')}>
+                                <Button size="sm" variant="outline" className="bg-white border-orange-200 text-orange-700 h-7 text-xs hover:bg-orange-100 w-full sm:w-auto" onClick={() => navigate('/sales/history?status=DRAFT')}>
                                     Review Drafts
                                 </Button>
                             </div>
@@ -329,7 +329,7 @@ export default function Dashboard({ isOwner }: { isOwner: boolean }) {
                                 <p className="text-xs text-amber-700 mt-1 mb-3 leading-relaxed">
                                     Drafts older than 48 hours detected. Please review to avoid confusion.
                                 </p>
-                                <Button size="sm" variant="outline" className="bg-white border-amber-200 text-amber-700 h-7 text-xs hover:bg-amber-100 w-full sm:w-auto" onClick={() => navigate('/purchases')}>
+                                <Button size="sm" variant="outline" className="bg-white border-amber-200 text-amber-700 h-7 text-xs hover:bg-amber-100 w-full sm:w-auto" onClick={() => navigate('/purchases/history?status=DRAFT')}>
                                     Review Drafts
                                 </Button>
                             </div>
@@ -383,7 +383,10 @@ export default function Dashboard({ isOwner }: { isOwner: boolean }) {
                             </CardContent>
                         </Card>
 
-                        <Card className="bg-gradient-to-br from-indigo-50 to-white border-indigo-100 shadow-sm hover:shadow-md transition-all duration-300 group">
+                        <Card
+                            onClick={(metrics?.total_ar || 0) > 0 ? () => navigate('/finance?tab=AR') : undefined}
+                            className={`bg-gradient-to-br from-indigo-50 to-white border-indigo-100 shadow-sm hover:shadow-md transition-all duration-300 group ${(metrics?.total_ar || 0) > 0 ? 'cursor-pointer' : 'cursor-default opacity-75'}`}
+                        >
                             <CardContent className="p-6">
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-1">
@@ -400,7 +403,10 @@ export default function Dashboard({ isOwner }: { isOwner: boolean }) {
                             </CardContent>
                         </Card>
 
-                        <Card className="bg-gradient-to-br from-rose-50 to-white border-rose-100 shadow-sm hover:shadow-md transition-all duration-300 group">
+                        <Card
+                            onClick={(metrics?.total_ap || 0) > 0 ? () => navigate('/finance?tab=AP') : undefined}
+                            className={`bg-gradient-to-br from-rose-50 to-white border-rose-100 shadow-sm hover:shadow-md transition-all duration-300 group ${(metrics?.total_ap || 0) > 0 ? 'cursor-pointer' : 'cursor-default opacity-75'}`}
+                        >
                             <CardContent className="p-6">
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-1">

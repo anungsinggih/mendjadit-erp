@@ -8,23 +8,8 @@ import { Checkbox } from './ui/Checkbox'
 import { Icons } from './ui/Icons'
 import { QuickMasterDialog } from './QuickMasterDialog'
 
-type Item = {
-    id: string
-    sku: string
-    name: string
-    type: 'FINISHED_GOOD' | 'RAW_MATERIAL' | 'TRADED'
-    uom_id: string
-    size_id: string
-    color_id: string
-    brand_id?: string
-    category_id?: string
-    price_default: number
-    price_khusus: number
-    default_price_buy: number
-    min_stock: number
-    is_active: boolean
-    uom?: string | { name: string, code: string } // Legacy or Relation
-}
+import { ITEM_TYPES } from "../lib/constants";
+import type { Item } from "../types/shared";
 
 type MasterData = {
     id: string
@@ -48,9 +33,8 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
     const [error, setError] = useState<string | null>(null)
 
     const [formData, setFormData] = useState<Partial<Item>>({
-        sku: '', name: '', type: 'FINISHED_GOOD',
-        price_default: 0, price_khusus: 0, default_price_buy: 0,
-        min_stock: 0, is_active: true
+        sku: '', name: '', type: ITEM_TYPES.FINISHED_GOOD,
+        min_stock: 5, is_active: true
     })
 
     // Quick Add State
@@ -75,10 +59,13 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
     }, [existingItem, uoms, sizes, colors])
 
     useEffect(() => {
-        if (formData.type === 'FINISHED_GOOD' && formData.default_price_buy !== 0) {
+        if (formData.type === ITEM_TYPES.FINISHED_GOOD && formData.default_price_buy !== 0) {
             setFormData(prev => ({ ...prev, default_price_buy: 0 }))
         }
-    }, [formData.type, formData.default_price_buy])
+        if (formData.type === ITEM_TYPES.RAW_MATERIAL && (formData.price_default !== 0 || formData.price_khusus !== 0)) {
+            setFormData(prev => ({ ...prev, price_default: 0, price_khusus: 0 }))
+        }
+    }, [formData.type, formData.default_price_buy, formData.price_default, formData.price_khusus])
 
     async function fetchMasterData() {
         const [uomRes, sizeRes, colorRes, brandRes, categoryRes] = await Promise.all([
@@ -106,6 +93,16 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                 throw new Error("Prices must be >= 0")
             }
 
+            // Validation Logic
+            if ((formData.type === ITEM_TYPES.FINISHED_GOOD || formData.type === ITEM_TYPES.TRADED)) {
+                if (!formData.price_default || formData.price_default <= 0) throw new Error("Harga Umum wajib diisi (> 0) untuk tipe ini.");
+                if (!formData.price_khusus || formData.price_khusus <= 0) throw new Error("Harga Khusus wajib diisi (> 0) untuk tipe ini.");
+            }
+
+            if ((formData.type === ITEM_TYPES.TRADED || formData.type === ITEM_TYPES.RAW_MATERIAL)) {
+                if (!formData.default_price_buy || formData.default_price_buy <= 0) throw new Error("Buy Price (Cost) wajib diisi (> 0) untuk tipe ini.");
+            }
+
             const selectedUom = uoms.find(u => u.id === formData.uom_id)
             const payload = {
                 sku: formData.sku,
@@ -118,7 +115,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                 category_id: formData.category_id || null,
                 price_default: formData.price_default,
                 price_khusus: formData.price_khusus,
-                default_price_buy: formData.type === 'FINISHED_GOOD' ? 0 : formData.default_price_buy,
+                default_price_buy: formData.type === ITEM_TYPES.FINISHED_GOOD ? 0 : formData.default_price_buy,
                 min_stock: formData.min_stock,
                 is_active: formData.is_active,
                 uom: selectedUom?.code || 'PCS'
@@ -191,9 +188,9 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         onChange={e => setFormData({ ...formData, type: e.target.value as any })}
                         options={[
-                            { label: 'Finished', value: 'FINISHED_GOOD' },
-                            { label: 'Raw Material', value: 'RAW_MATERIAL' },
-                            { label: 'Traded', value: 'TRADED' }
+                            { label: 'Finished', value: ITEM_TYPES.FINISHED_GOOD },
+                            { label: 'Raw Material', value: ITEM_TYPES.RAW_MATERIAL },
+                            { label: 'Traded', value: ITEM_TYPES.TRADED }
                         ]}
                     />
                 </div>
@@ -247,7 +244,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
 
                 <div className="grid grid-cols-2 gap-3 pt-2">
                     <Input
-                        label="Harga Umum"
+                        label={`Harga Umum${(formData.type === ITEM_TYPES.FINISHED_GOOD || formData.type === ITEM_TYPES.TRADED) ? ' *' : ''}`}
                         type="number"
                         step="0.01"
                         value={formData.price_default === 0 ? "" : formData.price_default}
@@ -255,9 +252,10 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                             const val = e.target.value
                             setFormData({ ...formData, price_default: val === "" ? 0 : parseFloat(val) })
                         }}
+                        disabled={formData.type === ITEM_TYPES.RAW_MATERIAL}
                     />
                     <Input
-                        label="Harga Khusus"
+                        label={`Harga Khusus${(formData.type === ITEM_TYPES.FINISHED_GOOD || formData.type === ITEM_TYPES.TRADED) ? ' *' : ''}`}
                         type="number"
                         step="0.01"
                         value={formData.price_khusus === 0 ? "" : formData.price_khusus}
@@ -265,12 +263,13 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                             const val = e.target.value
                             setFormData({ ...formData, price_khusus: val === "" ? 0 : parseFloat(val) })
                         }}
+                        disabled={formData.type === ITEM_TYPES.RAW_MATERIAL}
                     />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                     <Input
-                        label="Buy Price (Cost)"
+                        label={`Buy Price (Cost)${(formData.type === ITEM_TYPES.TRADED || formData.type === ITEM_TYPES.RAW_MATERIAL) ? ' *' : ''}`}
                         type="number"
                         step="0.01"
                         value={formData.default_price_buy === 0 ? "" : formData.default_price_buy}
@@ -278,7 +277,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                             const val = e.target.value
                             setFormData({ ...formData, default_price_buy: val === "" ? 0 : parseFloat(val) })
                         }}
-                        disabled={formData.type === 'FINISHED_GOOD'}
+                        disabled={formData.type === ITEM_TYPES.FINISHED_GOOD}
                     />
                     <Input
                         label="Min Stock"
@@ -290,7 +289,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                         }}
                     />
                 </div>
-                {formData.type === 'FINISHED_GOOD' && (
+                {formData.type === ITEM_TYPES.FINISHED_GOOD && (
                     <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
                         Untuk FINISHED_GOOD, HPP otomatis 0 (HPP dihitung periodik saat closing).
                     </div>

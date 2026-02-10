@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
-import { supabase } from "../supabaseClient";
+import { useEffect, useState, useCallback, memo } from "react";
+import type { MouseEvent } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/Table";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -9,20 +9,8 @@ import { usePagination } from "../hooks/usePagination";
 import { Pagination } from "./ui/Pagination";
 import { Section } from "./ui/Section";
 import { ButtonSelect } from "./ui/ButtonSelect";
-
-type InventoryItem = {
-    id: string
-    sku: string
-    name: string
-    uom: string
-    category_id?: string
-    size_name?: string
-    color_name?: string
-    inventory_stock?: {
-        qty_on_hand: number
-        avg_cost: number
-    }
-}
+import { useDebounce } from "../hooks/useDebounce";
+import { useInventoryQuery, type InventoryQueryItem } from "../hooks/useQueries";
 
 type Props = {
     selectedId: string | null
@@ -32,61 +20,87 @@ type Props = {
     refreshTrigger: number
 }
 
+type InventoryRowProps = {
+    item: InventoryQueryItem
+    isSelected: boolean
+    onSelect: (id: string | null) => void
+    onAdjust: (id: string, name: string) => void
+}
+
+const InventoryRow = memo(function InventoryRow({ item, isSelected, onSelect, onAdjust }: InventoryRowProps) {
+    const stock = item.inventory_stock?.qty_on_hand || 0
+
+    const handleSelect = useCallback(() => {
+        onSelect(isSelected ? null : item.id)
+    }, [isSelected, item.id, onSelect])
+
+    const handleAdjust = useCallback((e: MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation()
+        onAdjust(item.id, item.name)
+    }, [item.id, item.name, onAdjust])
+
+    return (
+        <TableRow
+            className={`cursor-pointer transition-all border-b border-gray-50 ${isSelected ? 'bg-indigo-50/50 hover:bg-indigo-50' : 'hover:bg-slate-50'}`}
+            onClick={handleSelect}
+        >
+            <TableCell>
+                <div className={`font-semibold  ${isSelected ? 'text-indigo-700' : 'text-slate-900'}`}>{item.name}</div>
+                <div className="text-xs text-slate-500 font-mono mt-0.5">{item.sku}</div>
+            </TableCell>
+            <TableCell className="text-center text-xs text-slate-600">
+                {item.size_name || '-'}
+            </TableCell>
+            <TableCell className="text-center text-xs text-slate-600">
+                {item.color_name || '-'}
+            </TableCell>
+            <TableCell className="text-right">
+                <Badge
+                    variant="outline"
+                    className={`
+                        ${stock > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}
+                    `}
+                >
+                    {stock.toLocaleString()} <span className="text-[10px] ml-1 opacity-70">{item.uom}</span>
+                </Badge>
+            </TableCell>
+            <TableCell>
+                <Button
+                    size="sm"
+                    variant="ghost"
+                    className="hover:bg-red-50 text-red-600 hover:text-red-700 h-9 w-9 p-0 rounded-full"
+                    onClick={handleAdjust}
+                    title="Adjust Stock"
+                >
+                    <Icons.Edit className="w-4 h-4" />
+                </Button>
+            </TableCell>
+        </TableRow>
+    )
+})
+
 export function InventoryList({ selectedId, onSelect, onAdjust, refreshTrigger }: Props) {
-    const [items, setItems] = useState<InventoryItem[]>([])
     const [search, setSearch] = useState("")
     const [typeFilter, setTypeFilter] = useState("ALL")
-    const [loading, setLoading] = useState(false)
+    const debouncedSearch = useDebounce(search, 350)
 
     const { page, setPage, pageSize, range } = usePagination({ defaultPageSize: 20 });
-    const [pageCount, setPageCount] = useState(0);
-
-    const fetchInventory = useCallback(async () => {
-        setLoading(true)
-        // Fetch items with stock
-        let query = supabase
-            .from('items')
-            .select('id, sku, name, uom, sizes(name), colors(name), inventory_stock(qty_on_hand, avg_cost)', { count: 'exact' })
-            .eq('is_active', true)
-
-        if (search) {
-            query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
-        }
-
-        if (typeFilter !== 'ALL') {
-            query = query.eq('type', typeFilter)
-        }
-
-        const { data, error, count } = await query
-            .order('name')
-            .range(range[0], range[1])
-
-        if (!error && data) {
-            // Flatten or handle array
-            const formatted = data.map(d => ({
-                ...d,
-                size_name: (d.sizes as unknown as { name: string } | null)?.name,
-                color_name: (d.colors as unknown as { name: string } | null)?.name,
-                inventory_stock: Array.isArray(d.inventory_stock) ? d.inventory_stock[0] : d.inventory_stock
-            })) as InventoryItem[]
-            setItems(formatted)
-            setPageCount(count || 0)
-        }
-        setLoading(false)
-    }, [range, search, typeFilter])
-
-    useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        void fetchInventory()
-    }, [fetchInventory, refreshTrigger])
+    const { data, isLoading, isFetching } = useInventoryQuery({
+        range,
+        search: debouncedSearch,
+        typeFilter,
+        refreshTrigger
+    })
 
     // Reset page on search
     useEffect(() => {
         setPage(1);
-    }, [search, typeFilter, setPage]);
+    }, [debouncedSearch, typeFilter, setPage]);
 
     // Derived state for display
-    const filtered = items;
+    const filtered = data?.items || [];
+    const pageCount = data?.count || 0;
+    const loading = isLoading || isFetching;
 
     return (
         <Section
@@ -146,52 +160,15 @@ export function InventoryList({ selectedId, onSelect, onAdjust, refreshTrigger }
                             ) : filtered.length === 0 ? (
                                 <TableRow><TableCell colSpan={5} className="text-center py-12 text-slate-400 italic">No items found</TableCell></TableRow>
                             ) : (
-                                filtered.map(item => {
-                                    const stock = item.inventory_stock?.qty_on_hand || 0
-                                    const isSelected = selectedId === item.id
-                                    return (
-                                        <TableRow
-                                            key={item.id}
-                                            className={`cursor-pointer transition-all border-b border-gray-50 ${isSelected ? 'bg-indigo-50/50 hover:bg-indigo-50' : 'hover:bg-slate-50'}`}
-                                            onClick={() => onSelect(isSelected ? null : item.id)}
-                                        >
-                                            <TableCell>
-                                                <div className={`font-semibold  ${isSelected ? 'text-indigo-700' : 'text-slate-900'}`}>{item.name}</div>
-                                                <div className="text-xs text-slate-500 font-mono mt-0.5">{item.sku}</div>
-                                            </TableCell>
-                                            <TableCell className="text-center text-xs text-slate-600">
-                                                {item.size_name || '-'}
-                                            </TableCell>
-                                            <TableCell className="text-center text-xs text-slate-600">
-                                                {item.color_name || '-'}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <Badge
-                                                    variant="outline"
-                                                    className={`
-                                                        ${stock > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}
-                                                    `}
-                                                >
-                                                    {stock.toLocaleString()} <span className="text-[10px] ml-1 opacity-70">{item.uom}</span>
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button
-                                                    size="sm"
-                                                    variant="ghost"
-                                                    className="hover:bg-red-50 text-red-600 hover:text-red-700 h-9 w-9 p-0 rounded-full"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onAdjust(item.id, item.name);
-                                                    }}
-                                                    title="Adjust Stock"
-                                                >
-                                                    <Icons.Edit className="w-4 h-4" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    )
-                                })
+                                filtered.map(item => (
+                                    <InventoryRow
+                                        key={item.id}
+                                        item={item}
+                                        isSelected={selectedId === item.id}
+                                        onSelect={onSelect}
+                                        onAdjust={onAdjust}
+                                    />
+                                ))
                             )}
                         </TableBody>
                     </Table>

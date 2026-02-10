@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Select } from "./ui/Select";
+import { ButtonSelect } from "./ui/ButtonSelect";
 import { Switch } from "./ui/Switch";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 
@@ -27,7 +27,7 @@ export function FinanceReceiptForm({
         new Date().toISOString().split("T")[0]
     );
     const [amount, setAmount] = useState(initialAmount);
-    const [method, setMethod] = useState("CASH");
+    const [method, setMethod] = useState("");
     const [isPettyCash, setIsPettyCash] = useState(false);
     const [submitting, setSubmitting] = useState(false);
 
@@ -50,13 +50,6 @@ export function FinanceReceiptForm({
     useEffect(() => {
         setAmount(initialAmount);
     }, [initialAmount]);
-
-    useEffect(() => {
-        // Default method
-        if (paymentMethods.length && !paymentMethods.some(m => m.code === method)) {
-            setMethod(paymentMethods[0].code);
-        }
-    }, [paymentMethods, method]);
 
     useEffect(() => {
         if (isPettyCash && method !== "CASH") {
@@ -86,8 +79,12 @@ export function FinanceReceiptForm({
             onError("Amount cannot exceed outstanding amount");
             return;
         }
+        if (!method) {
+            onError("Pilih Metode Pembayaran (CASH/BANK)!");
+            return;
+        }
 
-        const normalizedMethod = (method || "CASH").toUpperCase();
+        const normalizedMethod = method.toUpperCase();
 
         if (isPettyCash && normalizedMethod !== "CASH") {
             onError("Petty cash receipts must use CASH method");
@@ -123,12 +120,13 @@ export function FinanceReceiptForm({
     const methodOptions =
         paymentMethods.length > 0
             ? paymentMethods.map((m) => ({
-                label: `${m.code} - ${m.name}`,
+                label: `${m.code}`,
                 value: m.code,
+                disabled: isPettyCash
             }))
             : [
-                { label: "CASH", value: "CASH" },
-                { label: "BANK", value: "BANK" },
+                { label: "CASH", value: "CASH", disabled: isPettyCash },
+                { label: "BANK", value: "BANK", disabled: isPettyCash },
             ];
 
     const content = (
@@ -154,13 +152,17 @@ export function FinanceReceiptForm({
                 <span>Outstanding: {initialAmount.toLocaleString()}</span>
                 <span>Remaining: {Math.max(initialAmount - amount, 0).toLocaleString()}</span>
             </div>
-            <Select
-                label="Method"
-                value={method}
-                onChange={(e) => setMethod(e.target.value)}
-                options={methodOptions}
-                disabled={isPettyCash}
-            />
+
+            <div className="my-2">
+                <ButtonSelect
+                    label="Method"
+                    value={method}
+                    onChange={(val) => setMethod(val)}
+                    options={methodOptions}
+                />
+                {!method && <p className="text-xs text-red-500 mt-1">* Wajib pilih metode</p>}
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-2">
                 <Switch
                     label="Petty Cash"

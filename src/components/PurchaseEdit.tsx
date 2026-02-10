@@ -1,16 +1,23 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { PurchaseEntryForm } from './PurchaseEntryForm';
 import { Button } from './ui/Button';
+import { useConfirm } from './ui/ConfirmDialogContext';
 
 export default function PurchaseEdit() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const { confirm } = useConfirm();
     const handleSuccess = (msg: string) => {
         console.log("Success:", msg);
     };
     const handleError = (msg: string) => {
         console.error("Error:", msg);
-        alert(msg);
+        void confirm({
+            title: 'Error',
+            description: msg,
+            confirmText: 'OK',
+            hideCancel: true
+        });
     };
 
     if (!id) {

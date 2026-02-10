@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from "../supabaseClient";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 import { Badge } from './ui/Badge'
@@ -21,6 +22,8 @@ interface DisplayItem {
     // Global
     item_name?: string;
     sku?: string;
+    size_name?: string;
+    color_name?: string;
 }
 
 type StockCardRow = {
@@ -30,6 +33,8 @@ type StockCardRow = {
     qty_change: number
     item_name?: string | null
     sku?: string | null
+    size_name?: string | null
+    color_name?: string | null
     item_id?: string
     created_at?: string
 }
@@ -39,6 +44,8 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
     const [allItems, setAllItems] = useState<DisplayItem[]>([]) // For client-side pagination (ItemCard)
     const [itemName, setItemName] = useState("")
     const [totalCount, setTotalCount] = useState(0)
+    const [hasOpeningStock, setHasOpeningStock] = useState(false)
+    const navigate = useNavigate()
 
     const { page, setPage, pageSize, range, reset: resetPage } = usePagination({ defaultPageSize: 20 });
     const [rangeStart, rangeEnd] = range;
@@ -73,10 +80,15 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
                 qty_in: m.qty_change > 0 ? m.qty_change : 0,
                 qty_out: m.qty_change < 0 ? Math.abs(m.qty_change) : 0,
                 item_name: m.item_name || undefined,
-                sku: m.sku || undefined
+                sku: m.sku || undefined,
+                size_name: m.size_name || undefined,
+                color_name: m.color_name || undefined
             }))
             setGlobalFeed(mapped)
             setTotalCount(count || 0)
+        } else {
+            setGlobalFeed([])
+            setTotalCount(0)
         }
         setLoading(false)
     }, [rangeStart, rangeEnd])
@@ -137,6 +149,9 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
             })
             setAllItems(res)
             setTotalCount(res.length)
+        } else {
+            setAllItems([])
+            setTotalCount(0)
         }
         setLoading(false)
     }, [itemId, startDate, endDate])
@@ -145,6 +160,13 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
     useEffect(() => {
         resetPage();
     }, [itemId, resetPage]);
+
+    // Reset page when date range changes (item view)
+    useEffect(() => {
+        if (itemId) {
+            resetPage()
+        }
+    }, [itemId, startDate, endDate, resetPage])
 
     // Effect to fetch Global Feed when !itemId
     useEffect(() => {
@@ -159,6 +181,20 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
         if (itemId) {
             // eslint-disable-next-line react-hooks/set-state-in-effect
             void fetchItemCard();
+
+            // Check existing opening stock
+            const checkOpening = async () => {
+                const { count } = await supabase
+                    .from('inventory_adjustments')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('item_id', itemId)
+                    .or('reason.ilike.Opening%,reason.ilike.%Import Initial Stock%')
+
+                setHasOpeningStock((count || 0) > 0)
+            }
+            void checkOpening()
+        } else {
+            setHasOpeningStock(false)
         }
     }, [itemId, fetchItemCard]);
 
@@ -226,6 +262,17 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
                                 </>
                             )}
                         </div>
+                        {itemId && !hasOpeningStock && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate('/opening-stock', { state: { itemId } })}
+                                icon={<Icons.Plus className="w-4 h-4" />}
+                                className="bg-white hover:bg-slate-50 text-indigo-600 border-indigo-200"
+                            >
+                                Set Opening Stock
+                            </Button>
+                        )}
                     </CardTitle>
                     {!itemId && (
                         <p className="text-xs text-slate-500 font-normal pl-7">
@@ -262,7 +309,15 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
                                         {!itemId && (
                                             <TableCell>
                                                 <div className="font-medium text-xs text-slate-900">{row.item_name}</div>
-                                                <div className="text-[10px] text-slate-500 font-mono">{row.sku}</div>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <div className="text-[10px] text-slate-500 font-mono">{row.sku}</div>
+                                                    {(row.size_name || row.color_name) && (
+                                                        <div className="flex gap-1">
+                                                            {row.size_name && <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-slate-200 text-slate-600 bg-slate-50">{row.size_name}</Badge>}
+                                                            {row.color_name && <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-slate-200 text-slate-600 bg-slate-50">{row.color_name}</Badge>}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </TableCell>
                                         )}
                                         <TableCell>
@@ -296,6 +351,6 @@ export default function StockCard({ itemId }: { itemId?: string | null }) {
                     />
                 </div>
             </Card>
-        </div>
+        </div >
     )
 }

@@ -268,9 +268,14 @@ export default function CustomerPricePage() {
               <span className="px-2 py-1 rounded-full bg-white border">
                 {dirtyCount > 0 ? `${dirtyCount} changes` : "No changes"}
               </span>
-              <Button variant="outline" onClick={fetchItems} disabled={loading}>
-                Refresh
-              </Button>
+              <Button
+                variant="outline"
+                onClick={fetchItems}
+                disabled={loading}
+                size="icon"
+                icon={<Icons.Refresh className="w-4 h-4" />}
+                title="Refresh"
+              />
             </div>
           </div>
         </CardHeader>

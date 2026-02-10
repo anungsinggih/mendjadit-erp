@@ -6,6 +6,7 @@ import { Input } from './ui/Input'
 import { Select } from './ui/Select'
 import { Textarea } from './ui/Textarea'
 import { Icons } from './ui/Icons'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 export default function DevResetData() {
     const [confirmText, setConfirmText] = useState('')
@@ -14,6 +15,7 @@ export default function DevResetData() {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [success, setSuccess] = useState<string | null>(null)
+    const { confirm } = useConfirm()
 
     // Environment check (only show in dev)
     const isDev = import.meta.env.DEV || import.meta.env.MODE === 'development'
@@ -24,9 +26,23 @@ export default function DevResetData() {
             return
         }
 
-        if (!confirm(`Warning: This will DELETE ${resetMode === 'FULL' ? 'ALL DATA (except COA seed)' : 'ALL TRANSACTIONS'}.\n\nThis action CANNOT be undone.\n\nAre you absolutely sure?`)) {
-            return
-        }
+        const ok = await confirm({
+            title: 'Confirm Reset',
+            description: (
+                <div className="space-y-2 text-sm text-gray-600">
+                    <p>
+                        This will <span className="font-semibold text-rose-600">DELETE</span>{' '}
+                        {resetMode === 'FULL' ? 'ALL DATA (except COA seed)' : 'ALL TRANSACTIONS'}.
+                    </p>
+                    <p className="font-semibold text-rose-600">This action CANNOT be undone.</p>
+                    <p>Are you absolutely sure?</p>
+                </div>
+            ),
+            confirmText: 'Reset',
+            cancelText: 'Cancel',
+            tone: 'danger'
+        })
+        if (!ok) return
 
         setLoading(true)
         setError(null)

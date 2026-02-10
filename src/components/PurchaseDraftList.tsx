@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Icons } from "./ui/Icons";
 import { StatusBadge } from "./ui/StatusBadge";
 import { useNavigate } from "react-router-dom";
+import { getErrorMessage } from "../lib/errors";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 
 type PurchaseDraft = {
     id: string;
@@ -21,8 +23,9 @@ type Props = {
 
 export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props) {
     const [drafts, setDrafts] = useState<PurchaseDraft[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [postingId, setPostingId] = useState<string | null>(null);
     const navigate = useNavigate();
+    const { confirm } = useConfirm();
 
     const fetchDrafts = useCallback(async () => {
         const { data } = await supabase
@@ -38,20 +41,33 @@ export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props)
     }, [fetchDrafts, refreshTrigger]);
 
     async function handlePost(purId: string) {
-        if (!confirm("Confirm POST?")) return;
-        setLoading(true);
+        const ok = await confirm({
+            title: "Post Purchase Draft",
+            description: "Confirm POST? This is irreversible.",
+            confirmText: "POST",
+            cancelText: "Cancel",
+            tone: "danger",
+        });
+        if (!ok) return;
+        setPostingId(purId);
         try {
-            const { error } = await supabase.rpc("rpc_post_purchase", {
+            const { data, error } = await supabase.rpc("rpc_post_purchase", {
                 p_purchase_id: purId,
             });
             if (error) throw error;
-            onSuccess("Purchase POSTED!");
+            const journalSkipped =
+                (data as { journal_skipped?: boolean } | null | undefined)?.journal_skipped ??
+                (Array.isArray(data) ? (data[0] as { journal_skipped?: boolean } | undefined)?.journal_skipped : undefined);
+            onSuccess(
+                journalSkipped
+                    ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
+                    : "Purchase POSTED!"
+            );
             navigate(`/purchases/${purId}`);
         } catch (err: unknown) {
-            if (err instanceof Error) onError(err.message);
-            else onError('Unknown error');
+            onError(getErrorMessage(err));
         } finally {
-            setLoading(false);
+            setPostingId(null);
         }
     }
 
@@ -69,7 +85,9 @@ export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props)
                     </p>
                 ) : (
                     <ul className="space-y-4">
-                        {drafts.map((d) => (
+                        {drafts.map((d) => {
+                            const isPosting = postingId === d.id;
+                            return (
                             <li
                                 key={d.id}
                                 className="p-4 border border-gray-100 rounded-lg hover:border-purple-300 hover:shadow-md transition-all bg-white"
@@ -90,15 +108,16 @@ export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props)
                                     <Button
                                         type="button"
                                         onClick={() => handlePost(d.id)}
-                                        disabled={loading}
+                                        disabled={isPosting}
                                         className="w-full sm:w-auto min-h-[44px] bg-blue-600 hover:bg-blue-700"
                                         icon={<Icons.Check className="w-4 h-4" />}
                                     >
-                                        POST Purchase
+                                        {isPosting ? "Posting..." : "POST Purchase"}
                                     </Button>
                                 </div>
                             </li>
-                        ))}
+                            );
+                        })}
                     </ul>
                 )}
             </CardContent>

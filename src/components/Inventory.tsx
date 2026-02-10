@@ -44,14 +44,7 @@ export default function Inventory() {
                             <Icons.Edit className="w-4 h-4" />
                             Stock Adjustment
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => navigate('/opening-stock')}
-                            className="inline-flex items-center gap-2 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-white hover:bg-[var(--bg-surface-alt)] text-[var(--text-main)]"
-                        >
-                            <Icons.Plus className="w-4 h-4" />
-                            Opening Stock
-                        </button>
+
                     </div>
                 }
             />

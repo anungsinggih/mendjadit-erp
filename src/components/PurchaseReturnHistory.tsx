@@ -1,5 +1,3 @@
-import { useEffect, useState } from 'react'
-import { supabase } from '../supabaseClient'
 import { useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
@@ -8,70 +6,16 @@ import { Icons } from './ui/Icons'
 import { EmptyState } from './ui/EmptyState'
 import { StatusBadge } from './ui/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/format'
-
-type PurchaseReturnRecord = {
-    id: string
-    return_date: string
-    purchase_id: string
-    purchase_no: string | null
-    vendor_name: string
-    total_amount: number
-    status: 'DRAFT' | 'POSTED' | 'VOID'
-    created_at: string
-    return_no: string
-}
+import { usePurchaseReturnHistoryQuery } from '../hooks/useQueries'
 
 export default function PurchaseReturnHistory() {
-    const [returns, setReturns] = useState<PurchaseReturnRecord[]>([])
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
     const navigate = useNavigate()
 
-    useEffect(() => {
-        fetchReturns()
-    }, [])
+    const { data, isLoading, isFetching, error: fetchError, refetch } = usePurchaseReturnHistoryQuery()
 
-    async function fetchReturns() {
-        setLoading(true)
-        setError(null)
-
-        try {
-            const { data, error: fetchError } = await supabase
-                .from('purchase_returns')
-                .select(`
-                    id,
-                    return_date,
-                    purchase_id,
-                    total_amount,
-                    status,
-                    created_at,
-                    purchases!purchase_id (
-                        purchase_no,
-                        vendors (
-                            name
-                        )
-                    )
-                    , return_no
-                `)
-                .order('return_date', { ascending: false })
-                .order('created_at', { ascending: false })
-
-            if (fetchError) throw fetchError
-
-            const enriched = data?.map(ret => ({
-                ...ret,
-                purchase_no: (ret.purchases as unknown as { purchase_no: string })?.purchase_no || 'N/A',
-                vendor_name: (ret.purchases as unknown as { vendors: { name: string } })?.vendors?.name || 'Unknown',
-                return_no: ret.return_no || ret.id.substring(0, 8)
-            })) || []
-
-            setReturns(enriched)
-        } catch (err: unknown) {
-            if (err instanceof Error) setError(err.message || 'Failed to fetch purchase returns')
-        } finally {
-            setLoading(false)
-        }
-    }
+    const returns = data || []
+    const loading = isLoading || isFetching
+    const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? 'Failed to fetch purchase returns' : null
 
     if (loading) {
         return (
@@ -87,18 +31,16 @@ export default function PurchaseReturnHistory() {
             <div className="flex justify-between items-center">
                 <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return History</h2>
                 <div className="flex gap-2">
-                    <Button onClick={fetchReturns} variant="outline" icon={<Icons.Refresh className="w-4 h-4" />}>
-                        Refresh
-                    </Button>
+                    <Button onClick={() => refetch()} variant="outline" size="icon" icon={<Icons.Refresh className="w-4 h-4" />} title="Refresh" />
                     <Button onClick={() => navigate('/purchase-return')} icon={<Icons.Plus className="w-4 h-4" />}>
                         New Return
                     </Button>
                 </div>
             </div>
 
-            {error && (
+            {fetchErrorMessage && (
                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
-                    <Icons.Warning className="w-5 h-5" /> {error}
+                    <Icons.Warning className="w-5 h-5" /> {fetchErrorMessage}
                 </div>
             )}
 
@@ -124,7 +66,7 @@ export default function PurchaseReturnHistory() {
                                         <TableHead>Vendor</TableHead>
                                         <TableHead className="text-right">Total</TableHead>
                                         <TableHead>Status</TableHead>
-                                        <TableHead>Actions</TableHead>
+                                        <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -146,20 +88,20 @@ export default function PurchaseReturnHistory() {
                                                 {formatCurrency(ret.total_amount)}
                                             </TableCell>
                                             <TableCell><StatusBadge status={ret.status} /></TableCell>
-                                            <TableCell>
-                                                <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                                            <TableCell className="text-right">
+                                                <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
                                                     {ret.status === 'DRAFT' && (
                                                         <Button
-                                                            size="sm"
+                                                            size="icon"
                                                             variant="outline"
                                                             onClick={(e) => {
                                                                 e.stopPropagation()
                                                                 navigate(`/purchase-return?draft=${ret.id}`)
                                                             }}
                                                             icon={<Icons.Edit className="w-4 h-4" />}
-                                                        >
-                                                            Edit
-                                                        </Button>
+                                                            aria-label="Edit return"
+                                                            title="Edit"
+                                                        />
                                                     )}
                                                 </div>
                                             </TableCell>

@@ -3,16 +3,19 @@ import { supabase } from '../supabaseClient'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
+import { Select } from './ui/Select'
 import { Switch } from './ui/Switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 import { Badge } from './ui/Badge'
 import { Icons } from './ui/Icons'
 import { getErrorMessage } from '../lib/errors'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 type Account = {
     id: string
     code: string
     name: string
+    account_type: string
     is_active: boolean
     is_system_account: boolean
 }
@@ -24,8 +27,9 @@ export default function COA() {
 
     const [editingId, setEditingId] = useState<string | null>(null)
     const [formData, setFormData] = useState<Partial<Account>>({
-        code: '', name: '', is_active: true, is_system_account: false
+        code: '', name: '', account_type: 'ASSET', is_active: true, is_system_account: false
     })
+    const { confirm } = useConfirm()
 
     useEffect(() => {
         fetchAccounts()
@@ -71,19 +75,33 @@ export default function COA() {
     function resetForm() {
         setEditingId(null)
         setFormData({
-            code: '', name: '', is_active: true, is_system_account: false
+            code: '', name: '', account_type: 'ASSET', is_active: true, is_system_account: false
         })
     }
 
     function handleEdit(acc: Account) {
         setEditingId(acc.id)
-        setFormData(acc)
+        setFormData({ ...acc, account_type: acc.account_type || 'ASSET' })
     }
 
     async function handleDelete(id: string) {
-        if (!confirm("Delete account?")) return
+        const ok = await confirm({
+            title: "Delete Account",
+            description: "Delete account? This action cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            tone: "danger",
+        })
+        if (!ok) return
         const { error } = await supabase.from('accounts').delete().eq('id', id)
-        if (error) alert("Could not delete. Try deactivating.")
+        if (error) {
+            void confirm({
+                title: "Cannot Delete",
+                description: "Could not delete. Try deactivating.",
+                confirmText: "OK",
+                hideCancel: true,
+            })
+        }
         else fetchAccounts()
     }
 
@@ -99,6 +117,50 @@ export default function COA() {
                             <CardTitle>{editingId ? 'Edit Account' : 'New Account'}</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4 pt-6">
+                            <Select
+                                label="Account Type"
+                                value={formData.account_type || 'ASSET'}
+                                onChange={e => {
+                                    const newType = e.target.value;
+                                    const prefixMap: Record<string, string> = {
+                                        'ASSET': '1',
+                                        'LIABILITY': '2',
+                                        'EQUITY': '3',
+                                        'REVENUE': '4',
+                                        'COGS': '5',
+                                        'EXPENSE': '6'
+                                    };
+
+                                    // Filter existing accounts with same prefix
+                                    const prefix = prefixMap[newType] || '9';
+                                    const existingCodes = accounts
+                                        .filter(a => a.code.startsWith(prefix))
+                                        .map(a => parseInt(a.code.replace(/\D/g, '')))
+                                        .filter(n => !isNaN(n))
+                                        .sort((a, b) => b - a);
+
+                                    // Generate next code (e.g. 11000 -> 11001)
+                                    // Default start if none exists: prefix + '1000' (e.g. 11000)
+                                    const nextCode = existingCodes.length > 0
+                                        ? (existingCodes[0] + 1).toString()
+                                        : `${prefix}1000`;
+
+                                    setFormData({
+                                        ...formData,
+                                        account_type: newType,
+                                        code: nextCode
+                                    });
+                                }}
+                                options={[
+                                    { label: 'Asset', value: 'ASSET' },
+                                    { label: 'Liability', value: 'LIABILITY' },
+                                    { label: 'Equity', value: 'EQUITY' },
+                                    { label: 'Revenue', value: 'REVENUE' },
+                                    { label: 'COGS', value: 'COGS' },
+                                    { label: 'Expense', value: 'EXPENSE' },
+                                ]}
+                                className="w-full"
+                            />
                             <Input
                                 label="Code (e.g. 1001)"
                                 value={formData.code}
@@ -137,12 +199,13 @@ export default function COA() {
                                     <TableRow>
                                         <TableHead>Code</TableHead>
                                         <TableHead>Name</TableHead>
+                                        <TableHead>Type</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead>Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {loading ? <TableRow><TableCell colSpan={4} className="text-center">Loading...</TableCell></TableRow> : accounts.map(a => (
+                                    {loading ? <TableRow><TableCell colSpan={5} className="text-center">Loading...</TableCell></TableRow> : accounts.map(a => (
                                         <TableRow key={a.id} className={!a.is_active ? 'bg-gray-100 opacity-60' : ''}>
                                             <TableCell>
                                                 <div className="flex items-center gap-2">
@@ -151,6 +214,9 @@ export default function COA() {
                                                 </div>
                                             </TableCell>
                                             <TableCell className="font-medium">{a.name}</TableCell>
+                                            <TableCell>
+                                                <Badge variant="outline">{a.account_type || 'ASSET'}</Badge>
+                                            </TableCell>
                                             <TableCell>
                                                 <Badge variant={a.is_active ? 'success' : 'secondary'}>
                                                     {a.is_active ? 'Active' : 'Inactive'}

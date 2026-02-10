@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -15,22 +15,14 @@ import CustomerForm, { type Customer } from "./CustomerForm";
 import { PricingService, type PriceCheckResult } from "../services/pricingService";
 import { Combobox } from "./ui/Combobox";
 
-type Item = {
-    id: string;
-    name: string;
-    sku: string;
-    uom: string;
-    stock_qty?: number | null;
-    size_name?: string;
-    color_name?: string;
-    price_default: number;
-    price_khusus: number;
-    type: string;
-};
+import { ITEM_TYPES } from "../lib/constants";
+import type { Item } from "../types/shared";
 type SalesLine = {
     item_id: string;
     item_name: string;
     sku: string;
+    size_name?: string;
+    color_name?: string;
     uom: string;
     qty: number;
     unit_price: number;
@@ -58,7 +50,7 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
     const [salesDate, setSalesDate] = useState(new Date().toISOString().split("T")[0]);
     const [terms, setTerms] = useState<"CASH" | "CREDIT">("CASH");
     const [paymentMethods, setPaymentMethods] = useState<{ code: string; name: string }[]>([]);
-    const [paymentMethodCode, setPaymentMethodCode] = useState("CASH");
+    const [paymentMethodCode, setPaymentMethodCode] = useState("");
     const [notes, setNotes] = useState("");
     const [shippingFee, setShippingFee] = useState(0);
     const [discountAmount, setDiscountAmount] = useState(0);
@@ -72,7 +64,7 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
     const [selectedItemId, setSelectedItemId] = useState("");
     const [qty, setQty] = useState(1);
     const [inputPrice, setInputPrice] = useState<number | null>(null);
-    const [itemFilter, setItemFilter] = useState<"ALL" | "TRADED" | "FINISHED_GOOD">("ALL");
+    const [itemFilter, setItemFilter] = useState<"ALL" | keyof typeof ITEM_TYPES>("ALL");
 
     // Refs for Accessibility/Keyboard Nav
     const customerSelectRef = useRef<HTMLButtonElement>(null);
@@ -85,7 +77,11 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
         if (error instanceof Error) return error.message;
         if (typeof error === "object") {
             const err = error as { message?: string; error_description?: string; details?: string };
-            return err.message || err.error_description || err.details || "Unknown error";
+            const raw = err.message || err.error_description || err.details || "Unknown error";
+            if (raw.includes("ck_sales_cash_method")) {
+                return "Select Payment Method";
+            }
+            return raw;
         }
         return String(error);
     }, []);
@@ -123,7 +119,8 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                 .from("items")
                 .select("id, name, sku, uom, price_default, price_khusus, type, sizes(name), colors(name), inventory_stock(qty_on_hand)")
                 .eq("is_active", true)
-                .in("type", ["TRADED", "FINISHED_GOOD"]);
+                .eq("is_active", true)
+                .in("type", [ITEM_TYPES.TRADED, ITEM_TYPES.FINISHED_GOOD]);
             if (itemError) throw itemError;
 
             const { data: methodData, error: methodError } = await supabase
@@ -142,7 +139,12 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                     ? Number(item.inventory_stock[0]?.qty_on_hand ?? 0)
                     : Number((item.inventory_stock as { qty_on_hand?: number } | null)?.qty_on_hand ?? 0),
             }));
-            setItems(mappedItems);
+            const itemsWithLabel = mappedItems.map(i => ({
+                ...i,
+                display_label: `${i.sku} - ${i.name}` +
+                    (i.size_name || i.color_name ? ` (${[i.size_name, i.color_name].filter(Boolean).join(", ")})` : "")
+            }));
+            setItems(itemsWithLabel);
             setPaymentMethods(methodData || []);
         } catch (err: unknown) {
             onError(getErrorMessage(err));
@@ -176,7 +178,7 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                 setCustomerId(saleData.customer_id);
                 setSalesDate(saleData.sales_date);
                 setTerms(saleData.terms);
-                setPaymentMethodCode(saleData.payment_method_code || 'CASH');
+                setPaymentMethodCode(saleData.payment_method_code || "");
                 setNotes(saleData.notes || '');
                 setShippingFee(Number(saleData.shipping_fee) || 0);
                 setDiscountAmount(Number(saleData.discount_amount) || 0);
@@ -192,28 +194,67 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                         uom_snapshot,
                         items (
                             name,
-                            sku
+                            sku,
+                            price_default,
+                            price_khusus,
+                            sizes ( name ),
+                            colors ( name )
                         )
                     `)
                     .eq('sales_id', initialSalesId);
 
                 if (itemsError) throw itemsError;
 
-        const loadedLines: SalesLine[] = itemsData?.map(item => {
-            const iData = Array.isArray(item.items) ? item.items[0] : item.items;
-            return {
-                item_id: item.item_id,
-                item_name: iData?.name || 'Unknown',
-                sku: iData?.sku || '',
-                uom: item.uom_snapshot,
-                qty: item.qty,
-                unit_price: item.unit_price,
-                subtotal: item.subtotal
-            };
-        }) || [];
+                const { data: customerData } = await supabase
+                    .from("customers")
+                    .select("customer_type")
+                    .eq("id", saleData.customer_id)
+                    .single();
+                const customerType = (customerData as { customer_type?: string } | null)?.customer_type || "UMUM";
 
-        const uniqueLines = normalizeLines(loadedLines);
-        setLines(uniqueLines);
+                let customPriceMap: Record<string, number> = {};
+                if (customerType === "CUSTOM") {
+                    const { data: priceData } = await supabase
+                        .from("customer_item_prices")
+                        .select("item_id, price")
+                        .eq("customer_id", saleData.customer_id)
+                        .eq("is_active", true);
+                    customPriceMap = (priceData || []).reduce((acc, row) => {
+                        acc[row.item_id as string] = Number(row.price);
+                        return acc;
+                    }, {} as Record<string, number>);
+                    setCustomerPriceMap(customPriceMap);
+                }
+
+                const loadedLines: SalesLine[] = itemsData?.map(item => {
+                    const iData = Array.isArray(item.items) ? item.items[0] : item.items;
+                    const basePrice = Number(iData?.price_default || 0);
+                    const khususPrice = Number(iData?.price_khusus || basePrice);
+                    let nextPrice = Number(item.unit_price);
+                    if (customerType === "CUSTOM") {
+                        nextPrice = customPriceMap[item.item_id] ?? basePrice;
+                    } else if (customerType === "KHUSUS") {
+                        nextPrice = khususPrice;
+                    } else {
+                        nextPrice = basePrice;
+                    }
+                    const sizeName = (iData as { sizes?: { name?: string } })?.sizes?.name;
+                    const colorName = (iData as { colors?: { name?: string } })?.colors?.name;
+                    return {
+                        item_id: item.item_id,
+                        item_name: iData?.name || 'Unknown',
+                        sku: iData?.sku || '',
+                        size_name: sizeName,
+                        color_name: colorName,
+                        uom: item.uom_snapshot,
+                        qty: item.qty,
+                        unit_price: nextPrice,
+                        subtotal: item.qty * nextPrice
+                    };
+                }) || [];
+
+                const uniqueLines = normalizeLines(loadedLines);
+                setLines(uniqueLines);
             } catch (err: unknown) {
                 onError(getErrorMessage(err));
             } finally {
@@ -262,13 +303,8 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
     useEffect(() => {
         if (terms === "CREDIT") {
             setPaymentMethodCode("");
-            return;
         }
-        if (!paymentMethodCode) {
-            const hasCash = paymentMethods.some((m) => m.code === "CASH");
-            setPaymentMethodCode(hasCash ? "CASH" : paymentMethods[0]?.code || "");
-        }
-    }, [terms, paymentMethods, paymentMethodCode]);
+    }, [terms]);
 
     useEffect(() => {
         if (!customerId) {
@@ -371,6 +407,8 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
             item_id: item.id,
             item_name: item.name,
             sku: item.sku,
+            size_name: item.size_name,
+            color_name: item.color_name,
             uom: item.uom,
             qty: qty,
             unit_price: finalUnitPrice,
@@ -411,8 +449,11 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
         setLines(lines.filter((_, i) => i !== index));
     }
 
-    const itemsTotal = lines.reduce((sum, l) => sum + l.subtotal, 0);
-    const totalAmount = itemsTotal + (shippingFee || 0) - (discountAmount || 0);
+    const itemsTotal = useMemo(() => lines.reduce((sum, l) => sum + l.subtotal, 0), [lines]);
+    const totalAmount = useMemo(
+        () => itemsTotal + (shippingFee || 0) - (discountAmount || 0),
+        [itemsTotal, shippingFee, discountAmount]
+    );
 
 
 
@@ -466,6 +507,32 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                 salesId = salesData.id;
             }
 
+            // AUTO-SAVE CUSTOM PRICES
+            // Only if customer is CUSTOM
+            const currentCustomer = customers.find(c => c.id === customerId);
+            if (currentCustomer?.customer_type === 'CUSTOM' && lines.length > 0) {
+                const upserts = lines.map(line => ({
+                    customer_id: customerId,
+                    item_id: line.item_id,
+                    price: line.unit_price
+                }));
+
+                // Perform upsert (ignore duplicates/update existing)
+                const { error: priceError } = await supabase
+                    .from('customer_item_prices')
+                    .upsert(upserts, { onConflict: 'customer_id,item_id' });
+
+                if (priceError) {
+                    console.error("Failed to auto-save custom prices:", priceError);
+                    // We don't block the sales save for this, but ideally we should warn or log
+                } else {
+                    // Update local map to reflect saved prices immediately
+                    const newMap = { ...customerPriceMap };
+                    upserts.forEach(u => newMap[u.item_id] = u.price);
+                    setCustomerPriceMap(newMap);
+                }
+            }
+
             const normalizedLines = normalizeLines(lines);
             if (normalizedLines.length !== lines.length) {
                 setLines(normalizedLines);
@@ -494,7 +561,7 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                 setLines([]);
                 setCustomerId("");
                 setTerms("CASH");
-                setPaymentMethodCode("CASH");
+                setPaymentMethodCode("");
                 setNotes("");
                 setShippingFee(0);
                 setDiscountAmount(0);
@@ -523,6 +590,8 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
         discountAmount,
         paymentMethodCode,
         lines,
+        customerPriceMap,
+        customers,
         normalizeLines,
         onSuccess,
         onSaved,
@@ -544,11 +613,14 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
 
         // PRICE DEVIATION CHECK
         const customer = customers.find(c => c.id === customerId);
-        if (customer && customer.customer_type !== 'CUSTOM') {
+        const customerType = customer?.customer_type === 'CUSTOM' || customer?.customer_type === 'KHUSUS' || customer?.customer_type === 'UMUM'
+            ? customer.customer_type
+            : 'UMUM';
+        if (customer && customerType !== 'CUSTOM') {
             try {
                 const deviations = await PricingService.checkPriceDeviations(
                     lines.map(l => ({ id: l.item_id, price: l.unit_price })),
-                    customer.customer_type
+                    customerType
                 );
 
                 if (deviations.length > 0) {
@@ -732,20 +804,21 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                                 <label className="text-sm font-medium text-[var(--text-main)]">Product (F4)</label>
                                                 {/* Mini Filter Tabs */}
                                                 <div className="flex bg-gray-100 p-0.5 rounded-lg">
-                                                    {(["ALL", "TRADED", "FINISHED_GOOD"] as const).map(type => (
+                                                    {(["ALL", ITEM_TYPES.TRADED, ITEM_TYPES.FINISHED_GOOD] as const).map(type => (
                                                         <button
                                                             key={type}
                                                             type="button"
                                                             onClick={() => {
                                                                 setItemFilter(type);
-                                                                setSelectedItemId(""); // Reset selection on filter change
+                                                                setSelectedItemId("");
+                                                                setInputPrice(null);
                                                             }}
-                                                            className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-md transition-all ${itemFilter === type
-                                                                ? "bg-white text-blue-700 shadow-sm"
-                                                                : "text-gray-400 hover:text-gray-600"
+                                                            className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${itemFilter === type
+                                                                ? "bg-indigo-100 text-indigo-700 ring-1 ring-indigo-200"
+                                                                : "bg-gray-100 text-gray-500 hover:bg-gray-200"
                                                                 }`}
                                                         >
-                                                            {type === "FINISHED_GOOD" ? "F.GOOD" : type}
+                                                            {type === "TRADED" ? "Traded" : type === "FINISHED_GOOD" ? "FG" : "All"}
                                                         </button>
                                                     ))}
                                                 </div>
@@ -770,12 +843,18 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                                     // Actually, let's assume we fetch it. I will add 'type' to fetch and Item type definition in a separate edit or assume I fix it.
                                                     // For now, I will map basic options without filter until I fix the fetch.
                                                     .map((i) => ({
-                                                        label: `${i.sku} - ${i.name}`,
+                                                        label: i.display_label || `${i.sku} - ${i.name}`,
                                                         value: i.id,
                                                         keywords: [i.sku, i.name],
                                                         content: (
                                                             <div className="flex justify-between w-full">
-                                                                <span><span className="font-mono text-gray-500 mr-2">{i.sku}</span>{i.name}</span>
+                                                                <span><span className="font-mono text-gray-500 mr-2">{i.sku}</span>{i.name}
+                                                                    {(i.size_name || i.color_name) && (
+                                                                        <span className="ml-1 text-slate-500 text-xs">
+                                                                            ({[i.size_name, i.color_name].filter(Boolean).join(", ")})
+                                                                        </span>
+                                                                    )}
+                                                                </span>
                                                                 {i.stock_qty !== undefined && (
                                                                     <span className={`text-xs ${Number(i.stock_qty) <= 0 ? 'text-red-500' : 'text-green-600'}`}>
                                                                         Stock: {i.stock_qty}
@@ -814,12 +893,9 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                             type="number"
                                             step="1"
                                             value={(() => {
-                                                // If inputPrice is set by user, show it (even if 0)
                                                 if (inputPrice !== null) return inputPrice;
-
                                                 const item = items.find((i) => i.id === selectedItemId);
                                                 if (!item) return "";
-
                                                 const customer = customers.find((c) => c.id === customerId);
                                                 let price = item.price_default;
                                                 if (customer?.customer_type === 'CUSTOM') {
@@ -832,6 +908,14 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                             })()}
                                             onChange={(e) => setInputPrice(Number(e.target.value))}
                                             onFocus={(e) => e.target.select()}
+                                            readOnly={(() => {
+                                                const customer = customers.find((c) => c.id === customerId);
+                                                return customer?.customer_type !== 'CUSTOM';
+                                            })()}
+                                            className={(() => {
+                                                const customer = customers.find((c) => c.id === customerId);
+                                                return customer?.customer_type !== 'CUSTOM' ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "";
+                                            })()}
                                             containerClassName="!mb-0"
                                         />
                                     </div>
@@ -847,9 +931,18 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                     </div>
                                 </div>
                                 {selectedItemId && (
-                                    <div className={`mt-2 text-xs ${isOverStock ? "text-red-600" : "text-gray-500"}`}>
-                                        Stok tersedia: {stockQty ?? 0} • Qty di cart: {existingQtyForSelected} • Qty input: {qty}
-                                        {isOverStock && " (melebihi stok)"}
+                                    <div className={`mt-2 text-xs flex flex-wrap gap-x-3 ${isOverStock ? "text-red-600" : "text-gray-500"}`}>
+                                        <span>Stok: {stockQty ?? 0}</span>
+                                        <span>Cart: {existingQtyForSelected}</span>
+                                        <span>Input: {qty}</span>
+                                        {isOverStock && <span>(melebihi stok)</span>}
+                                        {(() => {
+                                            const customer = customers.find((c) => c.id === customerId);
+                                            if (customerId && customer?.customer_type !== 'CUSTOM') {
+                                                return <span className="text-orange-600 italic">*Ubah Customer Type ke CUSTOM untuk edit harga</span>;
+                                            }
+                                            return null;
+                                        })()}
                                     </div>
                                 )}
                             </div>
@@ -861,6 +954,8 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                         <TableHeader className="bg-gray-50">
                                             <TableRow>
                                                 <TableHead>Item</TableHead>
+                                                <TableHead>Size</TableHead>
+                                                <TableHead>Color</TableHead>
                                                 <TableHead>Qty</TableHead>
                                                 <TableHead>Price</TableHead>
                                                 <TableHead>Subtotal</TableHead>
@@ -871,7 +966,7 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                             {lines.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell
-                                                        colSpan={5}
+                                                        colSpan={7}
                                                         className="text-center text-gray-400 py-8 italic bg-gray-50/30"
                                                     >
                                                         No items added to cart
@@ -885,6 +980,12 @@ export function SalesEntryForm({ onSuccess, onError, onSaved, redirectOnSave = t
                                                             <div className="text-xs text-gray-500">
                                                                 {l.sku}
                                                             </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-gray-600">
+                                                            {l.size_name || '-'}
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-gray-600">
+                                                            {l.color_name || '-'}
                                                         </TableCell>
                                                         <TableCell>
                                                             {l.qty}{" "}

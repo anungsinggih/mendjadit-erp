@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "./ui/Table";
 import { Button } from "./ui/Button";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 import { Badge } from "./ui/Badge";
 import { CustomerBadge } from "./ui/CustomerBadge";
 import { Alert } from "./ui/Alert";
@@ -18,6 +19,7 @@ import { Icons } from "./ui/Icons";
 import RelatedDocumentsCard, { type RelatedDocumentItem } from "./shared/RelatedDocumentsCard";
 import { SalesInvoicePrint } from "./print/SalesInvoicePrint";
 import { getErrorMessage } from "../lib/errors";
+import { formatDate, safeDocNo } from "../lib/format";
 import { toPng } from "html-to-image";
 
 type SalesDetail = {
@@ -61,6 +63,14 @@ type RelatedDoc = {
   ar_status?: string;
 };
 
+type SalesReturnSummary = {
+  id: string;
+  return_date: string;
+  total_amount: number;
+  status: "DRAFT" | "POSTED" | "VOID";
+  return_no?: string | null;
+};
+
 type CompanyProfile = {
   name: string;
   address: string;
@@ -87,6 +97,7 @@ export default function SalesDetail() {
   const [sale, setSale] = useState<SalesDetail | null>(null);
   const [items, setItems] = useState<SalesItem[]>([]);
   const [relatedDocs, setRelatedDocs] = useState<RelatedDoc>({});
+  const [returns, setReturns] = useState<SalesReturnSummary[]>([]);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [companyBanks, setCompanyBanks] = useState<CompanyBank[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,10 +110,16 @@ export default function SalesDetail() {
   const [isPosting, setIsPosting] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement | null>(null);
+  const { confirm } = useConfirm();
   const itemsTotal = useMemo(
     () => items.reduce((sum, item) => sum + (item.subtotal || 0), 0),
     [items],
   );
+  const computedTotal = itemsTotal + (sale?.shipping_fee || 0) - (sale?.discount_amount || 0);
+  const displayTotal =
+    sale?.status === "DRAFT"
+      ? computedTotal
+      : (sale?.total_amount ?? computedTotal);
 
   useEffect(() => {
     if (id) {
@@ -167,6 +184,8 @@ export default function SalesDetail() {
                     items (
                         name,
                         sku,
+                        price_default,
+                        price_khusus,
                         sizes ( name ),
                         colors ( name )
                     )
@@ -176,18 +195,59 @@ export default function SalesDetail() {
 
       if (itemsError) throw itemsError;
 
+      let customPriceMap: Record<string, number> = {};
+      if (saleData.status === "DRAFT" && saleData.customers) {
+        const customerType =
+          (saleData.customers as unknown as { customer_type?: string })?.customer_type ||
+          "UMUM";
+        if (customerType === "CUSTOM") {
+          const { data: priceData } = await supabase
+            .from("customer_item_prices")
+            .select("item_id, price")
+            .eq("customer_id", saleData.customer_id)
+            .eq("is_active", true);
+          customPriceMap = (priceData || []).reduce((acc, row) => {
+            acc[row.item_id as string] = Number(row.price);
+            return acc;
+          }, {} as Record<string, number>);
+        }
+      }
+
       const normalizedItems =
-        itemsData?.map((item) => ({
-          ...item,
-          item_name: (item.items as unknown as { name: string })?.name || "Unknown",
-          sku: (item.items as unknown as { sku: string })?.sku || "",
-          size_name:
-            (item.items as unknown as { sizes?: { name: string } })?.sizes?.name ||
-            undefined,
-          color_name:
-            (item.items as unknown as { colors?: { name: string } })?.colors?.name ||
-            undefined,
-        })) || [];
+        itemsData?.map((item) => {
+          const iData = item.items as unknown as {
+            name?: string;
+            sku?: string;
+            price_default?: number | null;
+            price_khusus?: number | null;
+            sizes?: { name: string };
+            colors?: { name: string };
+          };
+          const basePrice = Number(iData?.price_default || 0);
+          const khususPrice = Number(iData?.price_khusus || basePrice);
+          const customerType =
+            (saleData.customers as unknown as { customer_type?: string })?.customer_type ||
+            "UMUM";
+          let nextPrice = Number(item.unit_price);
+          if (saleData.status === "DRAFT") {
+            if (customerType === "CUSTOM") {
+              nextPrice = customPriceMap[item.item_id] ?? basePrice;
+            } else if (customerType === "KHUSUS") {
+              nextPrice = khususPrice;
+            } else {
+              nextPrice = basePrice;
+            }
+          }
+          return {
+            ...item,
+            unit_price: nextPrice,
+            subtotal: item.qty * nextPrice,
+            item_name: iData?.name || "Unknown",
+            sku: iData?.sku || "",
+            size_name: iData?.sizes?.name || undefined,
+            color_name: iData?.colors?.name || undefined,
+          };
+        }) || [];
 
       // Merge duplicate lines (same item + price) for cleaner draft view
       const mergedMap = new Map<string, SalesItem>();
@@ -258,6 +318,22 @@ export default function SalesDetail() {
 
         setRelatedDocs(related);
       }
+
+      // Fetch returns (all statuses)
+      const { data: returnsData, error: returnsError } = await supabase
+        .from("sales_returns")
+        .select("id, return_date, total_amount, status, return_no")
+        .eq("sales_id", saleId)
+        .order("return_date", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (returnsError) throw returnsError;
+      setReturns(
+        returnsData?.map((ret) => ({
+          ...ret,
+          return_no: ret.return_no || ret.id.substring(0, 8),
+        })) || [],
+      );
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Failed to fetch sales detail"));
     } finally {
@@ -285,8 +361,14 @@ export default function SalesDetail() {
 
   async function handleDeleteDraft() {
     if (!sale) return;
-    if (!confirm("Hapus draft ini? Tindakan ini tidak bisa dibatalkan."))
-      return;
+    const ok = await confirm({
+      title: "Delete Draft Sales",
+      description: "Hapus draft ini? Tindakan ini tidak bisa dibatalkan.",
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setIsDeleting(true);
     setDeleteError(null);
@@ -306,13 +388,14 @@ export default function SalesDetail() {
 
   async function handlePostDraft() {
     if (!sale) return;
-    if (
-      !confirm(
-        "Are you sure you want to POST this sales? This action cannot be undone."
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Post Sales",
+      description: "Are you sure you want to POST this sales? This action cannot be undone.",
+      confirmText: "POST",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setIsPosting(true);
     setPostError(null);
@@ -465,81 +548,82 @@ export default function SalesDetail() {
             Sales Detail
           </h2>
           <div className="flex gap-2 no-print flex-wrap">
-          {/* Register Payment Action */}
-          {sale.status === "POSTED" &&
-            sale.terms === "CREDIT" &&
-            relatedDocs.ar_status !== "PAID" && (
+            {/* Register Payment Action */}
+            {sale.status === "POSTED" &&
+              sale.terms === "CREDIT" &&
+              relatedDocs.ar_status !== "PAID" && (
+                <Button
+                  variant="success"
+                  onClick={() => {
+                    if (relatedDocs.ar_invoice_id) {
+                      navigate(`/finance?ar=${relatedDocs.ar_invoice_id}`);
+                    }
+                  }}
+                  icon={<Icons.DollarSign className="w-4 h-4" />}
+                >
+                  Register Payment
+                </Button>
+              )}
+            <Button
+              onClick={() => window.print()}
+              variant="outline"
+              icon={<Icons.Printer className="w-4 h-4" />}
+            >
+              Print
+            </Button>
+            <Button
+              onClick={handleDownloadImage}
+              variant="outline"
+              icon={<Icons.Image className="w-4 h-4" />}
+            >
+              Download Image
+            </Button>
+            {sale.status === "POSTED" && (
               <Button
-                className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                onClick={() => {
-                  if (relatedDocs.ar_invoice_id) {
-                    navigate(`/finance?ar=${relatedDocs.ar_invoice_id}`);
-                  }
-                }}
-                icon={<Icons.DollarSign className="w-4 h-4" />}
+                onClick={() => navigate(`/sales-return?sales=${sale.id}`)}
+                variant="primary"
+                icon={<Icons.Plus className="w-4 h-4" />}
               >
-                Register Payment
+                Create Return
               </Button>
             )}
-          <Button
-            onClick={() => window.print()}
-            variant="outline"
-            icon={<Icons.Printer className="w-4 h-4" />}
-          >
-            Print
-          </Button>
-          <Button
-            onClick={handleDownloadImage}
-            variant="outline"
-            icon={<Icons.Image className="w-4 h-4" />}
-          >
-            Download Image
-          </Button>
-          {sale.status === "POSTED" && (
             <Button
-              onClick={() => navigate(`/sales-return?sales=${sale.id}`)}
+              onClick={() => navigate("/sales/history")}
               variant="outline"
-              icon={<Icons.Plus className="w-4 h-4" />}
+              icon={<Icons.ArrowLeft className="w-4 h-4" />}
             >
-              Create Return
+              Back to List
             </Button>
-          )}
-          <Button
-            onClick={() => navigate("/sales/history")}
-            variant="outline"
-            icon={<Icons.ArrowLeft className="w-4 h-4" />}
-          >
-            Back to List
-          </Button>
-          {sale.status === "DRAFT" && (
-            <Button
-              onClick={() => navigate(`/sales/${sale.id}/edit`)}
-              icon={<Icons.Edit className="w-4 h-4" />}
-            >
-              Edit
-            </Button>
-          )}
-          {sale.status === "DRAFT" && (
-            <Button
-              onClick={handlePostDraft}
-              isLoading={isPosting}
-              disabled={isPosting}
-              className="bg-green-600 hover:bg-green-700 text-white"
-              icon={<Icons.Check className="w-4 h-4" />}
-            >
-              Post
-            </Button>
-          )}
-          {sale.status === "DRAFT" && (
-            <Button
-              variant="danger"
-              onClick={handleDeleteDraft}
-              isLoading={isDeleting}
-              disabled={isDeleting}
-            >
-              Delete Draft
-            </Button>
-          )}
+            {sale.status === "DRAFT" && (
+              <Button
+                onClick={() => navigate(`/sales/${sale.id}/edit`)}
+                variant="primary"
+                icon={<Icons.Edit className="w-4 h-4" />}
+              >
+                Edit
+              </Button>
+            )}
+            {sale.status === "DRAFT" && (
+              <Button
+                onClick={handlePostDraft}
+                isLoading={isPosting}
+                disabled={isPosting}
+                variant="success"
+                icon={<Icons.Check className="w-4 h-4" />}
+              >
+                Post
+              </Button>
+            )}
+            {sale.status === "DRAFT" && (
+              <Button
+                variant="danger"
+                onClick={handleDeleteDraft}
+                isLoading={isDeleting}
+                disabled={isDeleting}
+              >
+                Delete Draft
+              </Button>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 bg-white border border-slate-200 rounded-lg p-4">
@@ -565,7 +649,7 @@ export default function SalesDetail() {
           </div>
           <div className="space-y-1 md:text-right">
             <p className="text-[11px] uppercase tracking-wide text-slate-500">Total</p>
-            <p className="font-semibold text-slate-900">{formatCurrency(sale.total_amount)}</p>
+            <p className="font-semibold text-slate-900">{formatCurrency(displayTotal)}</p>
           </div>
         </div>
         {(deleteError || deleteSuccess) && (
@@ -649,7 +733,7 @@ export default function SalesDetail() {
                 <div>
                   <p className="text-gray-600">Total</p>
                   <p className="font-bold text-lg">
-                    {formatCurrency(sale.total_amount)}
+                    {formatCurrency(displayTotal)}
                   </p>
                 </div>
               </div>
@@ -673,6 +757,8 @@ export default function SalesDetail() {
                   <TableRow>
                     <TableHead>SKU</TableHead>
                     <TableHead>Item Name</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Color</TableHead>
                     <TableHead>UoM</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Unit Price</TableHead>
@@ -686,12 +772,13 @@ export default function SalesDetail() {
                         {item.sku}
                       </TableCell>
                       <TableCell>
-                        <div>{item.item_name}</div>
-                        {(item.size_name || item.color_name) && (
-                          <div className="text-xs text-gray-500">
-                            {[item.size_name, item.color_name].filter(Boolean).join(" • ")}
-                          </div>
-                        )}
+                        {item.item_name}
+                      </TableCell>
+                      <TableCell className="text-sm text-gray-600">
+                        {item.size_name || '-'}
+                      </TableCell>
+                      <TableCell className="text-sm text-gray-600">
+                        {item.color_name || '-'}
                       </TableCell>
                       <TableCell>{item.uom_snapshot}</TableCell>
                       <TableCell className="text-right">{item.qty}</TableCell>
@@ -705,7 +792,7 @@ export default function SalesDetail() {
                   ))}
                   {(sale.shipping_fee || 0) > 0 && (
                     <TableRow className="bg-gray-50">
-                      <TableCell colSpan={5} className="text-right">
+                      <TableCell colSpan={7} className="text-right">
                         Ongkir
                       </TableCell>
                       <TableCell className="text-right font-medium">
@@ -715,7 +802,7 @@ export default function SalesDetail() {
                   )}
                   {(sale.discount_amount || 0) > 0 && (
                     <TableRow className="bg-gray-50">
-                      <TableCell colSpan={5} className="text-right">
+                      <TableCell colSpan={7} className="text-right">
                         Diskon
                       </TableCell>
                       <TableCell className="text-right font-medium">
@@ -724,11 +811,11 @@ export default function SalesDetail() {
                     </TableRow>
                   )}
                   <TableRow className="bg-gray-50 font-bold border-t-2">
-                    <TableCell colSpan={5} className="text-right">
+                    <TableCell colSpan={7} className="text-right">
                       TOTAL:
                     </TableCell>
                     <TableCell className="text-right">
-                      {formatCurrency(sale.total_amount)}
+                      {formatCurrency(displayTotal)}
                     </TableCell>
                   </TableRow>
                 </TableBody>
@@ -758,7 +845,7 @@ export default function SalesDetail() {
                 </div>
                 <div className="flex justify-between border-t pt-3">
                   <span className="text-gray-700 font-semibold">Total</span>
-                  <span className="font-bold">{formatCurrency(sale.total_amount)}</span>
+                  <span className="font-bold">{formatCurrency(displayTotal)}</span>
                 </div>
                 <div className="pt-2 border-t">
                   <div className="flex justify-between">
@@ -782,6 +869,54 @@ export default function SalesDetail() {
                 </div>
               </CardContent>
             </Card>
+
+            {Array.isArray(returns) && returns.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Returns</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Return No</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {returns.map((ret) => {
+                          const returnNo = ret.return_no || safeDocNo(null, ret.id);
+                          return (
+                            <TableRow key={ret.id}>
+                              <TableCell>{formatDate(ret.return_date)}</TableCell>
+                              <TableCell className="font-mono text-sm">{returnNo}</TableCell>
+                              <TableCell className="text-right font-medium">
+                                {formatCurrency(ret.total_amount)}
+                              </TableCell>
+                              <TableCell>{getStatusBadge(ret.status)}</TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  onClick={() => navigate(`/sales-returns/${ret.id}`)}
+                                  icon={<Icons.Eye className="w-4 h-4" />}
+                                  aria-label="View Return"
+                                  title="View"
+                                />
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Related Documents (POSTED only) */}
             {sale.status === "POSTED" && (
@@ -876,7 +1011,7 @@ export default function SalesDetail() {
               sales_date: sale.sales_date,
               customer_name: sale.customer_name,
               terms: sale.terms,
-              total_amount: sale.total_amount,
+              total_amount: displayTotal,
               shipping_fee: sale.shipping_fee,
               discount_amount: sale.discount_amount,
               notes: sale.notes

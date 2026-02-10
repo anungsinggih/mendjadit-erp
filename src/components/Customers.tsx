@@ -1,117 +1,92 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { Button } from './ui/Button'
 import { Icons } from './ui/Icons'
+import { useConfirm } from './ui/ConfirmDialogContext'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/Dialog'
 import CustomerForm, { type Customer } from './CustomerForm'
 import CustomerList from './CustomerList'
 import { useNavigate } from 'react-router-dom'
 import { getErrorMessage } from '../lib/errors'
 import { formatCurrency } from '../lib/format'
+import { useCustomersQuery, useCustomerOutstandingQuery } from '../hooks/useQueries'
 
 export default function Customers() {
     const navigate = useNavigate()
-    const [customers, setCustomers] = useState<Customer[]>([])
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-    const [statsLoading, setStatsLoading] = useState(false)
-    const [stats, setStats] = useState<{
-        total: number;
-        active: number;
-        inactive: number;
-        outstanding: number | null;
-    }>({
-        total: 0,
-        active: 0,
-        inactive: 0,
-        outstanding: null
-    })
+    const { confirm } = useConfirm()
 
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
     const [isModalOpen, setIsModalOpen] = useState(false)
 
-    async function fetchCustomers() {
-        setLoading(true)
-        const { data, error } = await supabase
-            .from('customers')
-            .select('*')
-            .order('name', { ascending: true })
+    const { data: customers = [], isLoading, isFetching, error: fetchError, refetch } = useCustomersQuery()
 
-        if (error) {
-            setError(getErrorMessage(error))
-        } else {
-            const list = (data as Customer[]) || []
-            setCustomers(list)
-            const active = list.filter(c => c.is_active).length
-            setStats(prev => ({
-                ...prev,
-                total: list.length,
-                active,
-                inactive: list.length - active
-            }))
+    const { data: outstanding, isLoading: statsLoading, error: statsError, refetch: refetchOutstanding } = useCustomerOutstandingQuery()
+
+    const stats = useMemo(() => {
+        const active = customers.filter(c => c.is_active).length
+        return {
+            total: customers.length,
+            active,
+            inactive: customers.length - active,
+            outstanding: statsError ? null : (outstanding ?? null)
         }
-        setLoading(false)
-    }
+    }, [customers, outstanding, statsError])
 
-    function handleSuccess() {
+    const handleSuccess = useCallback(() => {
         setEditingCustomer(null)
         setIsModalOpen(false)
-        fetchCustomers()
-    }
+        refetch()
+        refetchOutstanding()
+    }, [refetch, refetchOutstanding])
 
-    function handleAddCustomer() {
+    const handleAddCustomer = useCallback(() => {
         setEditingCustomer(null)
         setIsModalOpen(true)
-    }
+    }, [])
 
-    function handleEdit(customer: Customer) {
+    const handleEdit = useCallback((customer: Customer) => {
         setEditingCustomer(customer)
         setIsModalOpen(true)
-    }
-
-    function handlePrices(customer: Customer) {
-        navigate(`/customers/${customer.id}/pricing`)
-    }
-
-    function handleView(customer: Customer) {
-        navigate(`/customers/${customer.id}`)
-    }
-
-    function handleCreateSale(customer: Customer) {
-        navigate(`/sales?customer=${customer.id}`)
-    }
-
-    async function handleDelete(id: string) {
-        if (!confirm("Delete customer?")) return
-        const { error } = await supabase.from('customers').delete().eq('id', id)
-        if (error) alert("Could not delete. Try deactivating.")
-        else fetchCustomers()
-    }
-
-    async function fetchOutstanding() {
-        setStatsLoading(true)
-        const { data, error } = await supabase
-            .from('ar_invoices')
-            .select('outstanding_amount,status')
-
-        if (!error) {
-            const sum = (data || [])
-                .filter((row: { status: string }) => row.status !== 'PAID')
-                .reduce((acc: number, row: { outstanding_amount: number | null }) => acc + (row.outstanding_amount || 0), 0)
-            setStats(prev => ({ ...prev, outstanding: sum }))
-        } else {
-            setStats(prev => ({ ...prev, outstanding: null }))
-        }
-        setStatsLoading(false)
-    }
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            fetchCustomers()
-            fetchOutstanding()
-        }, 0)
-        return () => clearTimeout(timer)
     }, [])
+
+    const handlePrices = useCallback((customer: Customer) => {
+        navigate(`/customers/${customer.id}/pricing`)
+    }, [navigate])
+
+    const handleView = useCallback((customer: Customer) => {
+        navigate(`/customers/${customer.id}`)
+    }, [navigate])
+
+    const handleCreateSale = useCallback((customer: Customer) => {
+        navigate(`/sales?customer=${customer.id}`)
+    }, [navigate])
+
+    const handleDelete = useCallback(async (id: string) => {
+        const ok = await confirm({
+            title: "Delete Customer",
+            description: "Delete customer? This action cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            tone: "danger",
+        })
+        if (!ok) return
+        const { error } = await supabase.from('customers').delete().eq('id', id)
+        if (error) {
+            void confirm({
+                title: "Cannot Delete",
+                description: "Could not delete. Try deactivating.",
+                confirmText: "OK",
+                hideCancel: true,
+            })
+        }
+        else {
+            refetch()
+            refetchOutstanding()
+        }
+    }, [confirm, refetch, refetchOutstanding])
+
+    const loading = isLoading || isFetching
+    const fetchErrorMessage = fetchError ? getErrorMessage(fetchError) : null
 
     return (
         <div className="w-full space-y-6">
@@ -120,7 +95,11 @@ export default function Customers() {
                 <Button onClick={handleAddCustomer} icon={<Icons.Plus className="w-4 h-4" />} className="w-full sm:w-auto">Add Customer</Button>
             </div>
 
-            {error && <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded-md flex items-center gap-2"><Icons.Warning className="w-5 h-5 flex-shrink-0" /> Error: {error}</div>}
+    {fetchErrorMessage && (
+        <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded-md flex items-center gap-2">
+            <Icons.Warning className="w-5 h-5 flex-shrink-0" /> Error: {fetchErrorMessage}
+        </div>
+    )}
 
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState, memo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
@@ -7,6 +7,7 @@ import { Badge } from './ui/Badge'
 import { CustomerBadge } from './ui/CustomerBadge'
 import { Icons } from './ui/Icons'
 import { type Customer } from './CustomerForm'
+import { useDebounce } from '../hooks/useDebounce'
 
 interface CustomerListProps {
     customers: Customer[]
@@ -18,14 +19,17 @@ interface CustomerListProps {
     onCreateSale: (customer: Customer) => void
 }
 
-export default function CustomerList({ customers, loading, onEdit, onDelete, onPrices, onView, onCreateSale }: CustomerListProps) {
+function CustomerList({ customers, loading, onEdit, onDelete, onPrices, onView, onCreateSale }: CustomerListProps) {
     const [searchTerm, setSearchTerm] = useState('')
+    const debouncedSearch = useDebounce(searchTerm, 350)
 
-    const filteredCustomers = customers.filter(c =>
-        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (c.phone && c.phone.includes(searchTerm)) ||
-        (c.address && c.address.toLowerCase().includes(searchTerm.toLowerCase()))
-    )
+    const filteredCustomers = useMemo(() => (
+        customers.filter(c =>
+            c.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+            (c.phone && c.phone.includes(debouncedSearch)) ||
+            (c.address && c.address.toLowerCase().includes(debouncedSearch.toLowerCase()))
+        )
+    ), [customers, debouncedSearch])
 
     return (
         <Card>
@@ -109,3 +113,5 @@ export default function CustomerList({ customers, loading, onEdit, onDelete, onP
         </Card >
     )
 }
+
+export default memo(CustomerList)

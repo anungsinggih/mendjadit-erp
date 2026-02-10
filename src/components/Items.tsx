@@ -1,123 +1,139 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 import { Icons } from './ui/Icons'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/Dialog'
 import ItemForm from './ItemForm'
 import { ItemImportDialog } from './ItemImportDialog'
 import { usePagination } from '../hooks/usePagination'
+import { useDebounce } from '../hooks/useDebounce'
 import { Pagination } from './ui/Pagination'
 import { PageHeader } from './ui/PageHeader'
 import { Section } from './ui/Section'
 import { ResponsiveTable } from './ui/ResponsiveTable'
 import { getErrorMessage } from '../lib/errors'
+import { useItemsQuery } from '../hooks/useQueries'
 
-type Item = {
-    id: string
-    sku: string
-    name: string
-    type: 'FINISHED_GOOD' | 'RAW_MATERIAL' | 'TRADED'
-    uom_id: string
-    size_id: string
-    color_id: string
-    price_default: number
-    price_khusus: number
-    default_price_buy: number
-    min_stock: number
-    is_active: boolean
-    // Relations
-    uom?: { name: string, code: string }
-    size?: { name: string, code: string }
-    color?: { name: string, code: string }
-    brand?: { name: string }
-    category?: { name: string }
+import type { Item } from "../types/shared";
+import { ITEM_TYPES, type ItemType } from "../lib/constants";
+
+type ItemRowProps = {
+    item: Item
+    onEdit: (item: Item) => void
+    onDelete: (id: string) => void
 }
+
+const ItemRow = memo(({ item, onEdit, onDelete }: ItemRowProps) => (
+    <TableRow className="hover:bg-slate-50/80 transition-colors">
+        <TableCell className="font-mono text-xs font-semibold text-slate-600">{item.sku}</TableCell>
+        <TableCell>
+            <div className="font-medium text-slate-900 group-hover:text-indigo-700 transition-colors">{item.name}</div>
+            <div className="text-[11px] text-slate-500 flex flex-wrap gap-1 mt-1">
+                {item.brand && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{item.brand.name}</span>}
+                {item.category && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{item.category.name}</span>}
+                {item.uom_detail && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 font-mono">{item.uom_detail.code}</span>}
+            </div>
+        </TableCell>
+        <TableCell className="text-xs text-slate-600">
+            {item.size ? (item.size.code || item.size.name) : <span className="text-slate-300">-</span>}
+        </TableCell>
+        <TableCell className="text-xs text-slate-600">
+            {item.color ? (item.color.code || item.color.name) : <span className="text-slate-300">-</span>}
+        </TableCell>
+        <TableCell>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wide
+            ${item.type === 'FINISHED_GOOD' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                    item.type === 'TRADED' ? 'bg-sky-50 text-sky-700 border border-sky-100' :
+                        'bg-amber-50 text-amber-700 border border-amber-100'}`}>
+                {item.type === 'FINISHED_GOOD' ? 'FG' :
+                    item.type === 'TRADED' ? 'TD' : 'RM'}
+            </span>
+        </TableCell>
+        <TableCell className="text-right">
+            <div className="text-sm font-medium text-slate-700">{item.price_default.toLocaleString()}</div>
+        </TableCell>
+        <TableCell className="text-right">
+            <div className="text-sm text-slate-500">{item.price_khusus.toLocaleString()}</div>
+        </TableCell>
+        <TableCell className="text-center">
+            {item.is_active
+                ? <div className="w-2 h-2 rounded-full bg-emerald-500 mx-auto ring-4 ring-emerald-50" title="Active"></div>
+                : <div className="w-2 h-2 rounded-full bg-slate-300 mx-auto" title="Inactive"></div>
+            }
+        </TableCell>
+        <TableCell className="text-right">
+            <div className="flex justify-end gap-1">
+                <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onEdit(item)}
+                    className="h-9 w-9 p-0 text-slate-500 hover:text-indigo-600"
+                >
+                    <Icons.Edit className="w-[22px] h-[22px]" />
+                </Button>
+                <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onDelete(item.id)}
+                    className="h-9 w-9 p-0 text-slate-400 hover:text-rose-600"
+                >
+                    <Icons.Trash className="w-[22px] h-[22px]" />
+                </Button>
+            </div>
+        </TableCell>
+    </TableRow>
+))
+
+ItemRow.displayName = 'ItemRow'
 
 export default function Items() {
     const navigate = useNavigate()
-    const [items, setItems] = useState<Item[]>([])
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
 
     // Form State
     const [editingItem, setEditingItem] = useState<Item | null>(null)
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [isImportOpen, setIsImportOpen] = useState(false)
+    const { confirm } = useConfirm()
 
     const [searchTerm, setSearchTerm] = useState('')
-    const [typeFilter, setTypeFilter] = useState<'all' | 'sales' | 'RAW_MATERIAL'>('all')
+    const debouncedSearch = useDebounce(searchTerm, 400)
+    const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all')
 
     const { page, setPage, pageSize, range } = usePagination();
-    const [totalCount, setTotalCount] = useState(0);
-
-    const filteredItems = items
-
-    const fetchItems = useCallback(async () => {
-        setLoading(true)
-        try {
-            let query = supabase
-                .from('items')
-                .select(`
-                    *,
-                    brand:brands(name),
-                    category:categories(name),
-                    uom:uoms(name, code),
-                    size:sizes(name, code),
-                    color:colors(name, code)
-                `, { count: 'exact' })
-
-            // Apply Filters
-            if (searchTerm) {
-                query = query.or(`name.ilike.%${searchTerm}%,sku.ilike.%${searchTerm}%`)
-            }
-
-            if (typeFilter === 'sales') {
-                query = query.in('type', ['FINISHED_GOOD', 'TRADED'])
-            } else if (typeFilter === 'RAW_MATERIAL') {
-                query = query.eq('type', 'RAW_MATERIAL')
-            }
-
-            // Apply Pagination
-            const { data, error, count } = await query
-                .order('sku', { ascending: true })
-                .range(range[0], range[1])
-
-            if (error) throw error
-
-            setItems(data || [])
-            setTotalCount(count || 0)
-        } catch (err: unknown) {
-            setError(getErrorMessage(err))
-        } finally {
-            setLoading(false)
-        }
-    }, [range, searchTerm, typeFilter])
-
-    useEffect(() => {
-        fetchItems()
-    }, [fetchItems])
+    const { data, isLoading, isFetching, error: fetchError, refetch } = useItemsQuery({
+        range,
+        search: debouncedSearch,
+        typeFilter
+    })
 
     // Reset page when filters change
     useEffect(() => {
         setPage(1)
-    }, [searchTerm, typeFilter, setPage])
+    }, [debouncedSearch, typeFilter, setPage])
+
+    const filteredItems = data?.items || []
+    const totalCount = data?.count || 0
+    const loading = isLoading || isFetching
+    const fetchErrorMessage = fetchError ? getErrorMessage(fetchError) : null
 
 
     function handleSuccess() {
         setEditingItem(null)
         setIsModalOpen(false)
-        setLoading(true)
-        fetchItems()
+        refetch()
     }
 
-    function handleEdit(item: Item) {
+    const handleEdit = useCallback((item: Item) => {
+        // Shared item has type: string, but component might expect specific union for editing logic
+        // We can cast or just pass it as is if Form accepts string or Item
         setEditingItem(item)
         setIsModalOpen(true)
-    }
+    }, [])
 
     function handleAddItem() {
         setEditingItem(null)
@@ -125,16 +141,29 @@ export default function Items() {
     }
 
     function handleImportSuccess() {
-        setLoading(true)
-        fetchItems()
+        refetch()
     }
 
-    async function handleDelete(id: string) {
-        if (!confirm("Are you sure?")) return
+    const handleDelete = useCallback(async (id: string) => {
+        const ok = await confirm({
+            title: "Delete Item",
+            description: "Are you sure you want to delete this item?",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            tone: "danger",
+        })
+        if (!ok) return
         const { error } = await supabase.from('items').delete().eq('id', id)
-        if (error) alert("Could not delete (referenced). Try deactivating.")
-        else fetchItems()
-    }
+        if (error) {
+            void confirm({
+                title: "Cannot Delete",
+                description: "Could not delete (referenced). Try deactivating.",
+                confirmText: "OK",
+                hideCancel: true,
+            })
+        }
+        else refetch()
+    }, [confirm, refetch])
 
     return (
         <div className="w-full space-y-6 pb-20">
@@ -165,7 +194,11 @@ export default function Items() {
 
 
 
-            {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg relative flex items-center gap-2"><Icons.Warning className="w-5 h-5 flex-shrink-0" /> {error}</div>}
+            {fetchErrorMessage && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg relative flex items-center gap-2">
+                    <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {fetchErrorMessage}
+                </div>
+            )}
 
             <Section
                 title={`Item List (${totalCount})`}
@@ -209,8 +242,9 @@ export default function Items() {
                         <div className="flex bg-slate-100/80 p-1 rounded-lg">
                             {[
                                 { label: 'All', value: 'all' as const },
-                                { label: 'Sales', value: 'sales' as const },
-                                { label: 'Raw Material', value: 'RAW_MATERIAL' as const },
+                                { label: 'Finished Goods', value: ITEM_TYPES.FINISHED_GOOD },
+                                { label: 'Traded', value: ITEM_TYPES.TRADED },
+                                { label: 'Raw Material', value: ITEM_TYPES.RAW_MATERIAL },
                             ].map(tab => (
                                 <button
                                     key={tab.value}
@@ -233,8 +267,8 @@ export default function Items() {
                                     <TableHead className="text-xs uppercase tracking-wider text-slate-500">Size</TableHead>
                                     <TableHead className="text-xs uppercase tracking-wider text-slate-500">Color</TableHead>
                                     <TableHead className="text-xs uppercase tracking-wider text-slate-500">Type</TableHead>
-                                    <TableHead className="text-right text-xs uppercase tracking-wider text-slate-500">Price (Gen)</TableHead>
-                                    <TableHead className="text-right text-xs uppercase tracking-wider text-slate-500">Price (Spl)</TableHead>
+                                    <TableHead className="text-right text-xs uppercase tracking-wider text-slate-500">Price (Umum)</TableHead>
+                                    <TableHead className="text-right text-xs uppercase tracking-wider text-slate-500">Price (Khusus)</TableHead>
                                     <TableHead className="text-center text-xs uppercase tracking-wider text-slate-500">Active</TableHead>
                                     <TableHead className="text-right text-xs uppercase tracking-wider text-slate-500">Actions</TableHead>
                                 </TableRow>
@@ -257,64 +291,7 @@ export default function Items() {
                                     </TableRow>
                                 ) : (
                                     filteredItems.map(item => (
-                                        <TableRow key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                                            <TableCell className="font-mono text-xs font-semibold text-slate-600">{item.sku}</TableCell>
-                                            <TableCell>
-                                                <div className="font-medium text-slate-900 group-hover:text-indigo-700 transition-colors">{item.name}</div>
-                                                <div className="text-[11px] text-slate-500 flex flex-wrap gap-1 mt-1">
-                                                    {item.brand && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{item.brand.name}</span>}
-                                                    {item.category && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{item.category.name}</span>}
-                                                    {item.uom && <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 font-mono">{item.uom.code}</span>}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="text-xs text-slate-600">
-                                                {item.size ? (item.size.code || item.size.name) : <span className="text-slate-300">-</span>}
-                                            </TableCell>
-                                            <TableCell className="text-xs text-slate-600">
-                                                {item.color ? (item.color.code || item.color.name) : <span className="text-slate-300">-</span>}
-                                            </TableCell>
-                                            <TableCell>
-                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wide
-                                                ${item.type === 'FINISHED_GOOD' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                                                        item.type === 'TRADED' ? 'bg-sky-50 text-sky-700 border border-sky-100' :
-                                                            'bg-amber-50 text-amber-700 border border-amber-100'}`}>
-                                                    {item.type === 'FINISHED_GOOD' ? 'FG' :
-                                                        item.type === 'TRADED' ? 'TD' : 'RM'}
-                                                </span>
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="text-sm font-medium text-slate-700">{item.price_default.toLocaleString()}</div>
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="text-sm text-slate-500">{item.price_khusus.toLocaleString()}</div>
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                {item.is_active
-                                                    ? <div className="w-2 h-2 rounded-full bg-emerald-500 mx-auto ring-4 ring-emerald-50" title="Active"></div>
-                                                    : <div className="w-2 h-2 rounded-full bg-slate-300 mx-auto" title="Inactive"></div>
-                                                }
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        onClick={() => handleEdit(item)}
-                                                        className="h-9 w-9 p-0 text-slate-500 hover:text-indigo-600"
-                                                    >
-                                                        <Icons.Edit className="w-[22px] h-[22px]" />
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        onClick={() => handleDelete(item.id)}
-                                                        className="h-9 w-9 p-0 text-slate-400 hover:text-rose-600"
-                                                    >
-                                                        <Icons.Trash className="w-[22px] h-[22px]" />
-                                                    </Button>
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
+                                        <ItemRow key={item.id} item={item} onEdit={handleEdit} onDelete={handleDelete} />
                                     )))}
                             </TableBody>
                         </Table>

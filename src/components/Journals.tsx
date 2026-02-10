@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, memo, useMemo } from 'react'
 import { supabase } from '../supabaseClient'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Input } from './ui/Input'
@@ -9,6 +9,8 @@ import { usePagination } from '../hooks/usePagination'
 import { Pagination } from './ui/Pagination'
 import { formatCurrency, formatDate } from '../lib/format'
 import { getErrorMessage } from '../lib/errors'
+import { useDebounce } from '../hooks/useDebounce'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 
 type JournalEntry = {
     id: string
@@ -30,18 +32,16 @@ type JournalLine = {
 }
 
 // --- SUB-COMPONENT: JOURNAL ITEM WITH ACCORDION ---
-function JournalEntryItem({
+const JournalEntryItem = memo(function JournalEntryItem({
     journal,
-    formatCurrency,
     getRefTypeBadge,
     isExpanded,
     onToggle
 }: {
     journal: JournalEntry
-    formatCurrency: (n: number) => string
     getRefTypeBadge: (t: string) => React.ReactNode
     isExpanded: boolean
-    onToggle: () => void
+    onToggle: (id: string) => void
 }) {
     const totalDebit = journal.lines.reduce((sum, line) => sum + (line.debit || 0), 0)
     const totalCredit = journal.lines.reduce((sum, line) => sum + (line.credit || 0), 0)
@@ -54,11 +54,15 @@ function JournalEntryItem({
     // Clean memo to remove auto-generated prefixes if any, or just keep as is
     const cleanedMemo = memo
 
+    const handleToggle = useCallback(() => {
+        onToggle(journal.id)
+    }, [journal.id, onToggle])
+
     return (
         <div className={`bg-white rounded-lg border transition-all duration-200 ${isExpanded ? 'shadow-md ring-1 ring-indigo-500/20 border-indigo-200' : 'hover:shadow-sm border-slate-200'}`}>
             <div
                 className="p-4 cursor-pointer flex items-start gap-4 group"
-                onClick={onToggle}
+                onClick={handleToggle}
             >
                 {/* Icon Column */}
                 <div className="flex-shrink-0 pt-1">
@@ -146,54 +150,37 @@ function JournalEntryItem({
             )}
         </div>
     )
-}
+})
 
 export default function Journals() {
-    const [journals, setJournals] = useState<JournalEntry[]>([])
-    const [filteredJournals, setFilteredJournals] = useState<JournalEntry[]>([])
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-    const [searchTerm, setSearchTerm] = useState('')
+    const location = useLocation()
+    const searchTerm = useMemo(() => new URLSearchParams(location.search).get('q') || '', [location.search])
+    const debouncedSearchTerm = useDebounce(searchTerm, 350)
     const [startDate, setStartDate] = useState('')
     const [endDate, setEndDate] = useState('')
     const [openJournalId, setOpenJournalId] = useState<string | null>(null)
-    const location = useLocation()
     const navigate = useNavigate()
 
     const { page, setPage, pageSize, range } = usePagination({ defaultPageSize: 25 })
-    const [totalCount, setTotalCount] = useState(0)
 
-    const filterJournals = useCallback(() => {
-        let filtered = [...journals]
+    const handleToggle = useCallback((id: string) => {
+        setOpenJournalId(prev => (prev === id ? null : id))
+    }, [])
 
-        // Filter by search term (memo or ref_type)
-        if (searchTerm) {
-            filtered = filtered.filter(j =>
-                j.id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                j.memo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                j.ref_type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                j.ref_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                j.ref_display?.toLowerCase().includes(searchTerm.toLowerCase())
-            )
+    const handleSearchChange = useCallback((value: string) => {
+        const params = new URLSearchParams(location.search)
+        if (value) {
+            params.set('q', value)
+        } else {
+            params.delete('q')
         }
+        const next = params.toString()
+        navigate({ search: next ? `?${next}` : '' }, { replace: true })
+    }, [location.search, navigate])
 
-        // Filter by date range
-        if (startDate) {
-            filtered = filtered.filter(j => j.journal_date >= startDate)
-        }
-        if (endDate) {
-            filtered = filtered.filter(j => j.journal_date <= endDate)
-        }
-
-        setFilteredJournals(filtered)
-    }, [journals, searchTerm, startDate, endDate])
-
-    const fetchJournals = useCallback(async () => {
-        setLoading(true)
-        setError(null)
-
-        try {
-            // Fetch journals with their lines
+    const { data: journalData, isLoading, isFetching, error: fetchError, refetch } = useQuery({
+        queryKey: ['journals', range[0], range[1]],
+        queryFn: async () => {
             const { data: journalsData, error: journalsError, count } = await supabase
                 .from('journals')
                 .select('*', { count: 'exact' })
@@ -203,9 +190,6 @@ export default function Journals() {
 
             if (journalsError) throw journalsError
 
-            setTotalCount(count || 0)
-
-            // Fetch all journal lines
             const { data: linesData, error: linesError } = await supabase
                 .from('journal_lines')
                 .select(`
@@ -222,7 +206,6 @@ export default function Journals() {
 
             if (linesError) throw linesError
 
-            // Group lines by journal_id
             const linesMap: { [key: string]: JournalLine[] } = {}
             linesData?.forEach((line) => {
                 if (!linesMap[line.journal_id]) {
@@ -306,46 +289,52 @@ export default function Journals() {
                 return shortId(refId) || `JRN-${shortId(journal.id)}`
             }
 
-            // Combine journals with their lines
             const enrichedJournals = journalsList.map(journal => ({
                 ...journal,
                 ref_display: resolveRefDisplay(journal),
                 lines: linesMap[journal.id] || []
             }))
 
-            setJournals(enrichedJournals)
-            setFilteredJournals(enrichedJournals)
-        } catch (err: unknown) {
-            setError(getErrorMessage(err, 'Failed to fetch journals'))
-        } finally {
-            setLoading(false)
-        }
-    }, [range])
+            return { items: enrichedJournals as JournalEntry[], count: count || 0 }
+        },
+        placeholderData: keepPreviousData
+    })
 
-    useEffect(() => {
-        fetchJournals()
-    }, [fetchJournals])
+    const loading = isLoading || isFetching
+    const fetchErrorMessage = fetchError ? getErrorMessage(fetchError, 'Failed to fetch journals') : null
+    const journals = useMemo(() => journalData?.items ?? [], [journalData])
+    const totalCount = journalData?.count ?? 0
+
+    const filteredJournals = useMemo(() => {
+        let filtered = [...journals]
+
+        if (debouncedSearchTerm) {
+            const term = debouncedSearchTerm.toLowerCase()
+            filtered = filtered.filter(j =>
+                j.id?.toLowerCase().includes(term) ||
+                j.memo?.toLowerCase().includes(term) ||
+                j.ref_type?.toLowerCase().includes(term) ||
+                j.ref_id?.toLowerCase().includes(term) ||
+                j.ref_display?.toLowerCase().includes(term)
+            )
+        }
+
+        if (startDate) {
+            filtered = filtered.filter(j => j.journal_date >= startDate)
+        }
+        if (endDate) {
+            filtered = filtered.filter(j => j.journal_date <= endDate)
+        }
+
+        return filtered
+    }, [journals, debouncedSearchTerm, startDate, endDate])
 
     useEffect(() => {
         setPage(1)
-    }, [searchTerm, startDate, endDate, setPage])
-
-    useEffect(() => {
-        const params = new URLSearchParams(location.search)
-        const q = params.get('q')
-        if (q) {
-            setSearchTerm(q)
-            setStartDate('')
-            setEndDate('')
-        }
-    }, [location.search])
-
-    useEffect(() => {
-        filterJournals()
-    }, [filterJournals])
+    }, [debouncedSearchTerm, startDate, endDate, setPage])
 
 
-    function getRefTypeBadge(refType: string) {
+    const getRefTypeBadge = useCallback((refType: string) => {
         const normalized = (refType || '').toUpperCase()
         const config: { [key: string]: { class: string, icon: React.ReactNode, label: string } } = {
             'SALES': { class: 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-emerald-500/20', icon: <Icons.TrendingUp className="w-3 h-3" />, label: 'Sales' },
@@ -366,7 +355,7 @@ export default function Journals() {
                 {style.label}
             </span>
         )
-    }
+    }, [])
 
     if (loading) {
         return (
@@ -383,12 +372,12 @@ export default function Journals() {
                 <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Journal Entries</h2>
                 <div className="flex gap-2">
                     <Button
-                        onClick={fetchJournals}
+                        onClick={() => refetch()}
                         variant="outline"
+                        size="icon"
                         icon={<Icons.Refresh className="w-4 h-4" />}
-                    >
-                        Refresh
-                    </Button>
+                        title="Refresh"
+                    />
                     <Button
                         onClick={() => navigate('/journals/manual')}
                         icon={<Icons.Edit className="w-4 h-4" />}
@@ -398,9 +387,9 @@ export default function Journals() {
                 </div>
             </div>
 
-            {error && (
+            {fetchErrorMessage && (
                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
-                    <Icons.Warning className="w-5 h-5" /> {error}
+                    <Icons.Warning className="w-5 h-5" /> {fetchErrorMessage}
                 </div>
             )}
 
@@ -414,7 +403,7 @@ export default function Journals() {
                         <Input
                             label="Search (Type / Memo / ID)"
                             value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onChange={(e) => handleSearchChange(e.target.value)}
                             placeholder="Search journals..."
                         />
                         <Input
@@ -457,12 +446,9 @@ export default function Journals() {
                         <JournalEntryItem
                             key={journal.id}
                             journal={journal}
-                            formatCurrency={formatCurrency}
                             getRefTypeBadge={getRefTypeBadge}
                             isExpanded={openJournalId === journal.id}
-                            onToggle={() => {
-                                setOpenJournalId(prev => (prev === journal.id ? null : journal.id))
-                            }}
+                            onToggle={handleToggle}
                         />
                     ))
                 )}

@@ -12,6 +12,7 @@ Internal ERP for the Konveksi business: sales, purchases, inventory, and finance
   * No free-entry receipts/payments or manual journals.
 - **Focus areas**: Master data, Sales, Purchases, Inventory adjustments, Receipts/Payments, Finance reporting, Period locking.
 - **Master data**: `items.type` now includes `FINISHED_GOOD`, `RAW_MATERIAL`, and `TRADED`. `TRADED` entries are treated as non-stocked goods (posting skips inventory adjustments and manual stock/or opening-stock edits are rejected), so the existing posting contracts stay stable while we expand into trading/manufacturing later.
+- **Stock Card**: Added size and color badges to the "Item" column in the Stock Card table for better variant identification.
 
 ## Getting started
 

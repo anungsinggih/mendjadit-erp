@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Icons } from "./ui/Icons";
 import { StatusBadge } from "./ui/StatusBadge";
 import { useNavigate } from "react-router-dom";
+import { getErrorMessage } from "../lib/errors";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 
 type SalesDraft = {
     id: string;
@@ -21,8 +23,9 @@ type Props = {
 
 export function SalesDraftList({ refreshTrigger, onSuccess, onError }: Props) {
     const [drafts, setDrafts] = useState<SalesDraft[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [postingId, setPostingId] = useState<string | null>(null);
     const navigate = useNavigate();
+    const { confirm } = useConfirm();
 
     const fetchDrafts = useCallback(async () => {
         const { data } = await supabase
@@ -38,8 +41,15 @@ export function SalesDraftList({ refreshTrigger, onSuccess, onError }: Props) {
     }, [fetchDrafts, refreshTrigger]);
 
     async function handlePost(salesId: string) {
-        if (!confirm("Confirm POST? This is irreversible.")) return;
-        setLoading(true);
+        const ok = await confirm({
+            title: "Post Sales Draft",
+            description: "Confirm POST? This is irreversible.",
+            confirmText: "POST",
+            cancelText: "Cancel",
+            tone: "danger",
+        });
+        if (!ok) return;
+        setPostingId(salesId);
         try {
             const { error } = await supabase.rpc("rpc_post_sales", {
                 p_sales_id: salesId,
@@ -48,14 +58,14 @@ export function SalesDraftList({ refreshTrigger, onSuccess, onError }: Props) {
             onSuccess(`Sales POSTED Successfully! Journal Created.`);
             navigate(`/sales/${salesId}`);
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = getErrorMessage(err);
             if (message.includes("ck_stock_nonneg")) {
                 onError("FAILED: Insufficient Stock. Please add stock via Purchase or Adjustment first.");
             } else {
                 onError(message);
             }
         } finally {
-            setLoading(false);
+            setPostingId(null);
         }
     }
 
@@ -73,7 +83,9 @@ export function SalesDraftList({ refreshTrigger, onSuccess, onError }: Props) {
                     </p>
                 ) : (
                     <ul className="space-y-4">
-                        {drafts.map((d) => (
+                        {drafts.map((d) => {
+                            const isPosting = postingId === d.id;
+                            return (
                             <li
                                 key={d.id}
                                 className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:shadow-md transition-all bg-white group"
@@ -100,15 +112,16 @@ export function SalesDraftList({ refreshTrigger, onSuccess, onError }: Props) {
                                     <Button
                                         type="submit"
                                         onClick={() => handlePost(d.id)}
-                                        disabled={loading}
+                                        disabled={isPosting}
                                         className="w-full sm:w-auto min-h-[44px] bg-blue-600 hover:bg-blue-700"
                                         icon={<Icons.Check className="w-4 h-4" />}
                                     >
-                                        Post Order
+                                        {isPosting ? "Posting..." : "Post Order"}
                                     </Button>
                                 </div>
                             </li>
-                        ))}
+                            );
+                        })}
                     </ul>
                 )}
             </CardContent>

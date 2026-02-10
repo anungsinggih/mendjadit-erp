@@ -1,10 +1,12 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { SalesEntryForm } from './SalesEntryForm';
 import { Button } from './ui/Button';
+import { useConfirm } from './ui/ConfirmDialogContext';
 
 export default function SalesEdit() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const { confirm } = useConfirm();
 
     // Simple toast handler if no global context, or rely on passed props.
     // In this codebase, it seems components accept onSuccess/onError callbacks.
@@ -20,7 +22,12 @@ export default function SalesEdit() {
 
     const handleError = (msg: string) => {
         console.error("Error:", msg);
-        alert(msg);
+        void confirm({
+            title: 'Error',
+            description: msg,
+            confirmText: 'OK',
+            hideCancel: true
+        });
     };
 
     if (!id) {

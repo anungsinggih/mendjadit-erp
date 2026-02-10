@@ -16,6 +16,7 @@ type VendorDetailData = {
   phone: string | null;
   address: string | null;
   is_active: boolean;
+  vendor_type?: "SUPPLIER" | "KONVEKSI" | "INTERNAL" | null;
 };
 
 type PurchaseRow = {
@@ -41,13 +42,25 @@ export default function VendorDetail() {
     fetchDetail(id);
   }, [id]);
 
+  const getTypeLabel = (type?: VendorDetailData["vendor_type"]) => {
+    switch (type) {
+      case "KONVEKSI":
+        return "Konveksi";
+      case "INTERNAL":
+        return "Internal";
+      case "SUPPLIER":
+      default:
+        return "Supplier";
+    }
+  };
+
   async function fetchDetail(vendorId: string) {
     setLoading(true);
     setError(null);
     try {
       const { data: vendorData, error: vendorError } = await supabase
         .from("vendors")
-        .select("id,name,phone,address,is_active")
+        .select("id,name,phone,address,is_active,vendor_type")
         .eq("id", vendorId)
         .single();
       if (vendorError) throw vendorError;
@@ -116,6 +129,7 @@ export default function VendorDetail() {
                 <Badge variant={vendor.is_active ? "success" : "secondary"}>
                   {vendor.is_active ? "Active" : "Inactive"}
                 </Badge>
+                <Badge variant="outline">{getTypeLabel(vendor.vendor_type)}</Badge>
               </div>
             )}
           </div>
@@ -162,6 +176,10 @@ export default function VendorDetail() {
               <div>
                 <div className="text-gray-500">Phone</div>
                 <div className="font-medium">{vendor?.phone || "-"}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Type</div>
+                <div className="font-medium">{getTypeLabel(vendor?.vendor_type)}</div>
               </div>
               <div>
                 <div className="text-gray-500">Address</div>

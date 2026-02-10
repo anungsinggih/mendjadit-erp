@@ -3,17 +3,19 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/Tabs'
 import { Button } from './ui/Button'
-import { Input } from './ui/Input'
+import { DatePicker } from './ui/DatePicker'
 import { Select } from './ui/Select'
 import { Icons } from './ui/Icons'
 import { PageHeader } from './ui/PageHeader'
 import { Section } from './ui/Section'
+import { Badge } from './ui/Badge'
 import { getErrorMessage } from '../lib/errors'
 
 type AccountBalance = {
     id: string
     code: string
     name: string
+    account_type: string
     opening_balance: number
     debit_movement: number
     credit_movement: number
@@ -35,7 +37,7 @@ type CashflowLine = {
     amount: number
 }
 
-type Account = { id: string, name: string, code: string }
+type Account = { id: string, name: string, code: string, account_type: string }
 
 export default function Reporting() {
     const navigate = useNavigate()
@@ -50,6 +52,7 @@ export default function Reporting() {
     const [loading, setLoading] = useState(false)
     const [data, setData] = useState<AccountBalance[]>([])
     const [error, setError] = useState<string | null>(null)
+    const [isOwner, setIsOwner] = useState(false)
 
     // GL State
     const [glAccount, setGlAccount] = useState('')
@@ -65,6 +68,26 @@ export default function Reporting() {
     // Trigger fetch on tab or filter change
     useEffect(() => {
         fetchAccounts()
+    }, [])
+
+    useEffect(() => {
+        let active = true
+        const loadRole = async () => {
+            try {
+                const { data } = await supabase.auth.getUser()
+                if (!data?.user) return
+                const { data: profile } = await supabase
+                    .from('user_profiles')
+                    .select('role')
+                    .eq('id', data.user.id)
+                    .single()
+                if (active) setIsOwner((profile?.role || '').toUpperCase() === 'OWNER')
+            } catch {
+                if (active) setIsOwner(false)
+            }
+        }
+        loadRole()
+        return () => { active = false }
     }, [])
 
     useEffect(() => {
@@ -114,22 +137,32 @@ export default function Reporting() {
     }, [activeTab, startDate, endDate, glAccount])
 
     async function fetchAccounts() {
-        const { data } = await supabase.from('accounts').select('id, name, code').order('code')
+        const { data } = await supabase.from('accounts').select('id, name, code, account_type').order('code')
         setAccounts(data || [])
     }
 
     // UTILS
     const fmt = (n: number) => n?.toLocaleString('id-ID', { minimumFractionDigits: 2 })
 
+    const getAccountType = (row: AccountBalance) => {
+        if (row.account_type) return row.account_type
+        if (row.code.startsWith('1')) return 'ASSET'
+        if (row.code.startsWith('2')) return 'LIABILITY'
+        if (row.code.startsWith('3')) return 'EQUITY'
+        if (row.code.startsWith('4')) return 'REVENUE'
+        if (row.code.startsWith('5')) return 'COGS'
+        return 'EXPENSE'
+    }
+
     // Balance Sheet Logic
-    const assets = data.filter(d => d.code.startsWith('1'))
-    const liabs = data.filter(d => d.code.startsWith('2'))
-    const equity = data.filter(d => d.code.startsWith('3'))
+    const assets = data.filter(d => getAccountType(d) === 'ASSET')
+    const liabs = data.filter(d => getAccountType(d) === 'LIABILITY')
+    const equity = data.filter(d => getAccountType(d) === 'EQUITY')
 
     // P&L Logic
-    const revenue = data.filter(d => d.code.startsWith('4'))
-    const cogs = data.filter(d => d.code.startsWith('5'))
-    const expense = data.filter(d => d.code.startsWith('6') || d.code.startsWith('7') || d.code.startsWith('8') || d.code.startsWith('9'))
+    const revenue = data.filter(d => getAccountType(d) === 'REVENUE')
+    const cogs = data.filter(d => getAccountType(d) === 'COGS')
+    const expense = data.filter(d => getAccountType(d) === 'EXPENSE')
 
     const sum = (list: AccountBalance[]) => list.reduce((acc, curr) => acc + curr.closing_balance, 0)
     const retainedEarnings = sum(revenue) + sum(cogs) + sum(expense)
@@ -176,8 +209,17 @@ export default function Reporting() {
                     breadcrumbs={[{ label: "Dashboard", href: "/" }, { label: "Finance Reports" }]}
                     actions={
                         <div className="flex gap-2">
+                            {isOwner && (
+                                <Button
+                                    variant="success"
+                                    icon={<Icons.Wallet className="w-4 h-4" />}
+                                    onClick={() => navigate('/opening-balance')}
+                                >
+                                    Opening Balance
+                                </Button>
+                            )}
                             <Button
-                                variant="outline"
+                                variant="primary"
                                 icon={<Icons.Calendar className="w-4 h-4" />}
                                 onClick={() => navigate('/period-lock')}
                             >
@@ -202,18 +244,16 @@ export default function Reporting() {
                     <div className="flex items-center gap-2 w-full xl:w-auto px-2 pb-2 xl:pb-0">
                         <div className="flex items-center gap-2 w-full sm:w-auto">
                             <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Period:</span>
-                            <Input
-                                type="date"
+                            <DatePicker
                                 value={startDate}
-                                onChange={e => setStartDate(e.target.value)}
+                                onChange={(value) => setStartDate(value)}
                                 containerClassName="!mb-0 w-full sm:w-auto"
                                 className="h-9 text-sm py-1"
                             />
                             <span className="text-slate-400">-</span>
-                            <Input
-                                type="date"
+                            <DatePicker
                                 value={endDate}
-                                onChange={e => setEndDate(e.target.value)}
+                                onChange={(value) => setEndDate(value)}
                                 containerClassName="!mb-0 w-full sm:w-auto"
                                 className="h-9 text-sm py-1"
                             />
@@ -486,7 +526,19 @@ export default function Reporting() {
                                             onChange={e => setGlAccount(e.target.value)}
                                             options={[
                                                 { label: "-- Select an Account --", value: "" },
-                                                ...accounts.map(a => ({ label: `${a.code} - ${a.name}`, value: a.id }))
+                                                ...accounts.map(a => ({
+                                                    label: `${a.code} - ${a.name} (${a.account_type || 'ASSET'})`,
+                                                    value: a.id,
+                                                    searchText: `${a.code} ${a.name} ${a.account_type || 'ASSET'}`,
+                                                    content: (
+                                                        <div className="flex items-center justify-between w-full gap-3">
+                                                            <span className="text-sm font-medium text-slate-700">{a.code} - {a.name}</span>
+                                                            <Badge variant="outline" className="text-[10px] uppercase tracking-wide px-2 py-0.5">
+                                                                {a.account_type || 'ASSET'}
+                                                            </Badge>
+                                                        </div>
+                                                    )
+                                                }))
                                             ]}
                                             className="w-full !mb-0"
                                         />

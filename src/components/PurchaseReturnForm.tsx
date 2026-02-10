@@ -3,9 +3,12 @@ import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Select } from "./ui/Select";
+import { ButtonSelect } from "./ui/ButtonSelect";
 import { Input } from "./ui/Input";
+import { Textarea } from "./ui/Textarea";
 import { Separator } from "./ui/Separator";
 import { Icons } from "./ui/Icons";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 
 import { formatCurrency } from "../lib/format";
 import { getErrorMessage } from "../lib/errors";
@@ -17,6 +20,8 @@ type Purchase = {
     purchase_date: string
     vendor: { name: string }
     total_amount: number
+    terms?: string
+    payment_method_code?: string | null
 }
 
 type PurchaseItem = {
@@ -45,13 +50,26 @@ type Props = {
 
 export function PurchaseReturnForm({ onSuccess, onError }: Props) {
     const navigate = useNavigate()
+    const { confirm } = useConfirm()
     const [postedPurchases, setPostedPurchases] = useState<Purchase[]>([])
     const [selectedPurchaseId, setSelectedPurchaseId] = useState('')
     const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([])
     const [lines, setLines] = useState<ReturnItem[]>([])
     const [loading, setLoading] = useState(false)
     const [draftReturnDate, setDraftReturnDate] = useState<string | null>(null)
-    const linesTotal = lines.reduce((sum, line) => sum + (line.subtotal || 0), 0)
+    const [paymentMethodCode, setPaymentMethodCode] = useState('CASH')
+    const [notes, setNotes] = useState('')
+    const [paymentMethods, setPaymentMethods] = useState<{ code: string; name: string; is_active: boolean }[]>([])
+    const refundMethodOptions = useMemo(() => {
+        if (paymentMethods.length > 0) {
+            return paymentMethods.map((m) => ({
+                label: `${m.name} (${m.code})`,
+                value: m.code
+            }))
+        }
+        return [{ label: 'CASH', value: 'CASH' }]
+    }, [paymentMethods])
+    const linesTotal = useMemo(() => lines.reduce((sum, line) => sum + (line.subtotal || 0), 0), [lines])
     const availableRows = purchaseItems.map((item) => ({
         ...item,
         _inputId: `qty-${item.id}`,
@@ -77,6 +95,19 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
         fetchPostedPurchases()
     }, [fetchPostedPurchases])
 
+    const fetchPaymentMethods = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('payment_methods')
+            .select('code, name, is_active')
+            .eq('is_active', true)
+            .order('name', { ascending: true })
+        if (!error && data) setPaymentMethods(data)
+    }, [])
+
+    useEffect(() => {
+        fetchPaymentMethods()
+    }, [fetchPaymentMethods])
+
     const ensurePurchaseInList = useCallback(async (purchaseId: string) => {
         const { data, error } = await supabase
             .from('purchases')
@@ -96,13 +127,15 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
         try {
             const { data: header, error: headerError } = await supabase
                 .from('purchase_returns')
-                .select('id, purchase_id, return_date, status')
+                .select('id, purchase_id, return_date, status, notes, payment_method_code')
                 .eq('id', returnId)
                 .single()
             if (headerError) throw headerError
 
             setSelectedPurchaseId(header.purchase_id)
             setDraftReturnDate(header.return_date)
+            setNotes(header.notes || '')
+            setPaymentMethodCode(header.payment_method_code || 'CASH')
 
             const { data: itemsData, error: itemsError } = await supabase
                 .from('purchase_return_items')
@@ -146,6 +179,16 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
         ensurePurchaseInList(purchaseParamId)
     }, [purchaseParamId, draftId, ensurePurchaseInList])
 
+    useEffect(() => {
+        if (!selectedPurchaseId || isEditing) return
+        const purchase = postedPurchases.find((p) => p.id === selectedPurchaseId)
+        if (purchase?.terms === 'CASH') {
+            setPaymentMethodCode(purchase.payment_method_code || 'CASH')
+        } else {
+            setPaymentMethodCode('CASH')
+        }
+    }, [selectedPurchaseId, postedPurchases, isEditing])
+
     const fetchPurchaseItems = useCallback(async (purchaseId: string) => {
         const { data, error } = await supabase
             .from('purchase_items')
@@ -169,16 +212,18 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
     const normalizeLines = (source: ReturnItem[]) => {
         const map = new Map<string, ReturnItem>()
         source.forEach((line) => {
-            const key = `${line.item_id}::${line.unit_cost}::${line.uom}`
+            const safeCost = line.unit_cost ?? 0
+            const key = `${line.item_id}::${safeCost}::${line.uom}`
             const existing = map.get(key)
             if (existing) {
                 map.set(key, {
                     ...existing,
                     qty: existing.qty + line.qty,
-                    subtotal: existing.subtotal + line.subtotal
+                    subtotal: existing.subtotal + line.subtotal,
+                    unit_cost: safeCost
                 })
             } else {
-                map.set(key, { ...line })
+                map.set(key, { ...line, unit_cost: safeCost })
             }
         })
         return Array.from(map.values())
@@ -187,7 +232,12 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
     function handleAddItem(pItem: PurchaseItem, returnQty: number) {
         if (returnQty <= 0) return
         if (returnQty > pItem.qty) {
-            alert(`Cannot return more than purchased qty (${pItem.qty})`)
+            void confirm({
+                title: "Invalid Quantity",
+                description: `Cannot return more than purchased qty (${pItem.qty})`,
+                confirmText: "OK",
+                hideCancel: true,
+            })
             return
         }
 
@@ -196,17 +246,18 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
             l.unit_cost === pItem.unit_cost &&
             l.uom === pItem.uom_snapshot
         )
+        const safeCost = pItem.unit_cost ?? 0
         if (existing) {
             const newLines = lines.map(l => {
                 if (
                     l.item_id !== pItem.item_id ||
-                    l.unit_cost !== pItem.unit_cost ||
+                    l.unit_cost !== safeCost ||
                     l.uom !== pItem.uom_snapshot
                 ) return l
                 return {
                     ...l,
                     qty: l.qty + returnQty,
-                    subtotal: l.subtotal + (returnQty * l.unit_cost)
+                    subtotal: l.subtotal + (returnQty * safeCost)
                 }
             })
             setLines(newLines)
@@ -216,9 +267,9 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
                 sku: pItem.item.sku,
                 name: pItem.item.name,
                 qty: returnQty,
-                unit_cost: pItem.unit_cost,
+                unit_cost: safeCost,
                 uom: pItem.uom_snapshot,
-                subtotal: returnQty * pItem.unit_cost
+                subtotal: returnQty * safeCost
             }])
         }
     }
@@ -245,26 +296,24 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
                         purchase_id: selectedPurchaseId,
                         return_date: returnDate,
                         status: 'DRAFT',
-                        total_amount: totalAmount
+                        total_amount: totalAmount,
+                        notes: notes || null,
+                        payment_method_code: paymentMethodCode || 'CASH'
                     })
                     .eq('id', draftId)
                 if (updateError) throw updateError
 
-                const { error: delError } = await supabase
-                    .from('purchase_return_items')
-                    .delete()
-                    .eq('purchase_return_id', draftId)
-                if (delError) throw delError
-
                 const itemsPayload = normalizedLines.map(l => ({
-                    purchase_return_id: draftId,
                     item_id: l.item_id,
                     uom_snapshot: l.uom,
                     qty: l.qty,
                     unit_cost: l.unit_cost,
                     subtotal: l.subtotal
                 }))
-                const { error: linesError } = await supabase.from('purchase_return_items').insert(itemsPayload)
+                const { error: linesError } = await supabase.rpc('rpc_update_purchase_return_draft_items', {
+                    p_return_id: draftId,
+                    p_items: itemsPayload
+                })
                 if (linesError) throw linesError
 
                 onSuccess(`Return Draft Updated: ${draftId}`)
@@ -277,7 +326,9 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
                         purchase_id: selectedPurchaseId,
                         return_date: returnDate,
                         status: 'DRAFT',
-                        total_amount: totalAmount
+                        total_amount: totalAmount,
+                        notes: notes || null,
+                        payment_method_code: paymentMethodCode || 'CASH'
                     }])
                     .select()
                     .single()
@@ -286,15 +337,16 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
 
                 // 2. Items
                 const itemsPayload = normalizedLines.map(l => ({
-                    purchase_return_id: retData.id,
                     item_id: l.item_id,
                     uom_snapshot: l.uom,
                     qty: l.qty,
                     unit_cost: l.unit_cost,
                     subtotal: l.subtotal
                 }))
-
-                const { error: linesError } = await supabase.from('purchase_return_items').insert(itemsPayload)
+                const { error: linesError } = await supabase.rpc('rpc_update_purchase_return_draft_items', {
+                    p_return_id: retData.id,
+                    p_items: itemsPayload
+                })
                 if (linesError) throw linesError
 
                 onSuccess(`Return Draft Created: ${retData.id}`)
@@ -304,6 +356,11 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
             setLines([])
             if (!isEditing) {
                 setSelectedPurchaseId('')
+            }
+            if (!isEditing) {
+                setPaymentMethodCode('CASH')
+                setNotes('')
+                setDraftReturnDate(null)
             }
         } catch (err: unknown) {
             onError(getErrorMessage(err))
@@ -353,6 +410,38 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
                         <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100">
                             <CardTitle className="text-gray-800 flex items-center gap-2">
                                 <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold ring-1 ring-gray-200">2</span>
+                                Return Details
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="pt-6 space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <Input
+                                    label="Return Date"
+                                    type="date"
+                                    value={draftReturnDate || new Date().toISOString().split('T')[0]}
+                                    onChange={(e) => setDraftReturnDate(e.target.value)}
+                                    containerClassName="!mb-0"
+                                />
+                                <ButtonSelect
+                                    label="Refund Method"
+                                    value={paymentMethodCode}
+                                    onChange={(val: string) => setPaymentMethodCode(val)}
+                                    options={refundMethodOptions}
+                                />
+                            </div>
+                            <Textarea
+                                label="Notes"
+                                placeholder="Reason / notes"
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                            />
+                        </CardContent>
+                    </Card>
+
+                    <Card className="shadow-md border-gray-200">
+                        <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100">
+                            <CardTitle className="text-gray-800 flex items-center gap-2">
+                                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold ring-1 ring-gray-200">3</span>
                                 Select Items to Return
                             </CardTitle>
                         </CardHeader>

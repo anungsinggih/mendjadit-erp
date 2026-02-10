@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, memo } from "react";
 import { supabase } from "../supabaseClient";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import {
   Table,
@@ -15,6 +15,7 @@ import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { Alert } from "./ui/Alert";
 import { StatusBadge } from "./ui/StatusBadge";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 import { Badge } from "./ui/Badge";
 import { CustomerBadge } from "./ui/CustomerBadge";
 import { Icons } from './ui/Icons'
@@ -22,9 +23,11 @@ import { ResponsiveTable } from './ui/ResponsiveTable';
 import { EmptyState } from "./ui/EmptyState";
 import { formatCurrency, formatDate, safeDocNo } from "../lib/format";
 import { usePagination } from "../hooks/usePagination";
+import { useDebounce } from "../hooks/useDebounce";
 import { Pagination } from "./ui/Pagination";
 import { PageHeader } from "./ui/PageHeader";
 import { Section } from "./ui/Section";
+import { useSalesHistoryQuery, useSalesReturnDraftCountQuery } from "../hooks/useQueries";
 
 type SalesRecord = {
   id: string;
@@ -35,130 +38,150 @@ type SalesRecord = {
   customer_type: string;
   terms: "CASH" | "CREDIT";
   total_amount: number;
+  payment_method_code?: string | null;
+  ar_outstanding?: number | null;
   status: "DRAFT" | "POSTED" | "VOID";
   created_at: string;
 };
 
+type SalesRowProps = {
+  sale: SalesRecord;
+  onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
+  onPost: (id: string) => void;
+  postingId: string | null;
+};
+
+const SalesRow = memo(({ sale, onOpen, onEdit, onPost, postingId }: SalesRowProps) => (
+  <TableRow
+    className="cursor-pointer hover:bg-slate-50"
+    onClick={() => onOpen(sale.id)}
+  >
+    <TableCell>{formatDate(sale.sales_date)}</TableCell>
+    <TableCell className="font-mono text-sm">
+      {safeDocNo(sale.sales_no, sale.id)}
+    </TableCell>
+    <TableCell>
+      <CustomerBadge name={sale.customer_name} customerType={sale.customer_type} />
+    </TableCell>
+    <TableCell>
+      <div className="flex items-center gap-2">
+        <Badge
+          className={
+            sale.terms === "CASH"
+              ? "bg-blue-100 text-blue-800"
+              : "bg-orange-100 text-orange-800"
+          }
+        >
+          {sale.terms}
+        </Badge>
+        {sale.terms === "CASH" && (
+          <span className="text-[11px] text-gray-500 font-medium">
+            {sale.payment_method_code || "-"}
+          </span>
+        )}
+      </div>
+    </TableCell>
+    <TableCell className="text-right font-medium">
+      {formatCurrency(sale.total_amount)}
+    </TableCell>
+    <TableCell className="text-right">
+      {sale.terms === "CREDIT" && sale.ar_outstanding != null
+        ? formatCurrency(sale.ar_outstanding)
+        : "-"}
+    </TableCell>
+    <TableCell>
+      <StatusBadge status={sale.status} />
+    </TableCell>
+    <TableCell className="text-right">
+      <div className="flex flex-wrap items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+        {sale.status === "DRAFT" && (
+          <>
+            <Button
+              size="icon"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(sale.id);
+              }}
+              icon={<Icons.Edit className="w-4 h-4" />}
+              className="w-full sm:w-auto"
+              aria-label="Edit sales"
+              title="Edit"
+            />
+            <Button
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPost(sale.id);
+              }}
+              disabled={postingId === sale.id}
+              isLoading={postingId === sale.id}
+              className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white"
+              icon={<Icons.Check className="w-4 h-4" />}
+            >
+              POST
+            </Button>
+          </>
+        )}
+      </div>
+    </TableCell>
+  </TableRow>
+));
+
+SalesRow.displayName = 'SalesRow';
+
 export default function SalesHistory() {
-  const [sales, setSales] = useState<SalesRecord[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [postingId, setPostingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "DRAFT" | "POSTED" | "VOID">("ALL");
+  const debouncedSearch = useDebounce(search, 400);
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "DRAFT" | "POSTED" | "VOID">(
+    (initialStatus && ["DRAFT", "POSTED", "VOID"].includes(initialStatus))
+      ? (initialStatus as "DRAFT" | "POSTED" | "VOID")
+      : "ALL"
+  );
   const [termsFilter, setTermsFilter] = useState<"ALL" | "CASH" | "CREDIT">("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [draftReturnCount, setDraftReturnCount] = useState(0);
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
 
   const { page, setPage, pageSize, range } = usePagination();
-  const [totalCount, setTotalCount] = useState(0);
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
+  }, [debouncedSearch, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
 
-  const fetchSales = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
+  const {
+    data: salesData,
+    isLoading,
+    isFetching,
+    error: fetchError,
+    refetch: refetchSales
+  } = useSalesHistoryQuery({
+    range,
+    search: debouncedSearch,
+    statusFilter,
+    termsFilter,
+    dateFrom,
+    dateTo
+  });
 
-    try {
-      let query = supabase
-        .from("sales")
-        .select(
-          `
-                    id,
-                    sales_date,
-                    sales_no,
-                    customer_id,
-                    terms,
-                    total_amount,
-                    status,
-                    created_at,
-                    customers (
-                        name,
-                        customer_type
-                    )
-                `,
-          { count: "exact" }
-        )
-        .order("sales_date", { ascending: false })
-        .order("created_at", { ascending: false });
+  const { data: draftReturnCount = 0, refetch: refetchDraftCount } = useSalesReturnDraftCountQuery();
 
-      if (statusFilter !== "ALL") {
-        query = query.eq("status", statusFilter);
-      }
-      if (termsFilter !== "ALL") {
-        query = query.eq("terms", termsFilter);
-      }
-      if (dateFrom) {
-        query = query.gte("sales_date", dateFrom);
-      }
-      if (dateTo) {
-        query = query.lte("sales_date", dateTo);
-      }
-      if (search.trim()) {
-        const q = search.trim();
-        query = query.or(`sales_no.ilike.%${q}%,customers.name.ilike.%${q}%`);
-      }
-
-      query = query.range(range[0], range[1]);
-
-      const { data, error: fetchError, count } = await query;
-
-      if (fetchError) throw fetchError;
-
-      const enriched =
-        data?.map((sale) => ({
-          ...sale,
-          customer_name: (sale.customers as unknown as { name: string })?.name || "Unknown",
-          customer_type: (sale.customers as unknown as { customer_type: string })?.customer_type || "UMUM",
-        })) || [];
-
-      setSales(enriched);
-      setTotalCount(count || 0);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message || "Failed to fetch sales");
-      } else if (err && typeof err === "object" && "message" in err) {
-        setError(String((err as { message?: string }).message || "Failed to fetch sales"));
-      } else {
-        setError("Failed to fetch sales");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [range, search, statusFilter, termsFilter, dateFrom, dateTo]);
-
-  const fetchReturnDraftCount = useCallback(async () => {
-    try {
-      const { count, error: countError } = await supabase
-        .from("sales_returns")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "DRAFT");
-      if (countError) throw countError;
-      setDraftReturnCount(count || 0);
-    } catch {
-      setDraftReturnCount(0);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSales();
-    fetchReturnDraftCount();
-  }, [fetchSales, fetchReturnDraftCount]);
-
-  async function handlePost(saleId: string) {
-    if (
-      !confirm(
-        "Are you sure you want to POST this sales? This action cannot be undone.",
-      )
-    ) {
-      return;
-    }
+  const handlePost = useCallback(async (saleId: string) => {
+    const ok = await confirm({
+      title: "Post Sales",
+      description: "Are you sure you want to POST this sales? This action cannot be undone.",
+      confirmText: "POST",
+      cancelText: "Cancel",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setPostingId(saleId);
     setError(null);
@@ -193,7 +216,15 @@ export default function SalesHistory() {
     } finally {
       setPostingId(null);
     }
-  }
+  }, [confirm, navigate]);
+
+  const handleOpen = useCallback((id: string) => navigate(`/sales/${id}`), [navigate]);
+  const handleEdit = useCallback((id: string) => navigate(`/sales/${id}/edit`), [navigate]);
+
+  const sales = salesData?.items || [];
+  const totalCount = salesData?.count || 0;
+  const loading = isLoading || isFetching;
+  const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? "Failed to fetch sales" : null;
 
   if (loading) {
     return (
@@ -213,20 +244,24 @@ export default function SalesHistory() {
         actions={
           <div className="flex gap-2">
             <Button
-              onClick={fetchSales}
+              onClick={() => {
+                refetchSales();
+                refetchDraftCount();
+              }}
               variant="outline"
+              size="icon"
               icon={<Icons.Refresh className="w-4 h-4" />}
-            >
-              Refresh
-            </Button>
+              title="Refresh"
+            />
             <Button
               onClick={() => navigate("/sales-returns/history")}
               variant="outline"
               icon={<Icons.RotateCcw className="w-4 h-4" />}
+              className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 hover:border-red-300"
             >
               Return List
               {draftReturnCount > 0 && (
-                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2 py-0.5">
+                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-red-100 text-red-800 border border-red-200 text-[10px] font-semibold px-2 py-0.5">
                   {draftReturnCount}
                 </span>
               )}
@@ -241,7 +276,9 @@ export default function SalesHistory() {
         }
       />
 
-      {error && <Alert variant="error" title="Kesalahan" description={error} />}
+      {(fetchErrorMessage || error) && (
+        <Alert variant="error" title="Kesalahan" description={fetchErrorMessage || error || ""} />
+      )}
       {success && (
         <Alert variant="success" title="Sukses" description={success} />
       )}
@@ -348,77 +385,23 @@ export default function SalesHistory() {
                     <TableHead>Date</TableHead>
                     <TableHead>Doc No</TableHead>
                     <TableHead>Customer</TableHead>
-                    <TableHead>Terms</TableHead>
+                    <TableHead>Terms / Payment</TableHead>
                     <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Outstanding</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {sales.map((sale) => (
-                    <TableRow
+                    <SalesRow
                       key={sale.id}
-                      className="cursor-pointer hover:bg-slate-50"
-                      onClick={() => navigate(`/sales/${sale.id}`)}
-                    >
-                      <TableCell>{formatDate(sale.sales_date)}</TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {safeDocNo(sale.sales_no, sale.id)}
-                      </TableCell>
-                      <TableCell>
-                        <CustomerBadge name={sale.customer_name} customerType={sale.customer_type} />
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          className={
-                            sale.terms === "CASH"
-                              ? "bg-blue-100 text-blue-800"
-                              : "bg-orange-100 text-orange-800"
-                          }
-                        >
-                          {sale.terms}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatCurrency(sale.total_amount)}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={sale.status} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
-                          {sale.status === "DRAFT" && (
-                            <>
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate(`/sales/${sale.id}/edit`);
-                                }}
-                                icon={<Icons.Edit className="w-4 h-4" />}
-                                className="w-full sm:w-auto"
-                                aria-label="Edit sales"
-                                title="Edit"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePost(sale.id);
-                                }}
-                                disabled={postingId === sale.id}
-                                isLoading={postingId === sale.id}
-                                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white"
-                                icon={<Icons.Check className="w-4 h-4" />}
-                              >
-                                POST
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                      sale={sale}
+                      onOpen={handleOpen}
+                      onEdit={handleEdit}
+                      onPost={handlePost}
+                      postingId={postingId}
+                    />
                   ))}
                 </TableBody>
               </Table>

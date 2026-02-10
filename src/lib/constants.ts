@@ -45,3 +45,24 @@ export function getSizeSortOrder(name: string): number {
     const normalized = name.trim().toUpperCase();
     return SIZE_SORT_ORDER[normalized] || 999;
 }
+
+export const ITEM_TYPES = {
+  RAW_MATERIAL: "RAW_MATERIAL",
+  TRADED: "TRADED",
+  FINISHED_GOOD: "FINISHED_GOOD",
+} as const;
+
+export const TRANSACTION_STATUS = {
+  DRAFT: "DRAFT",
+  POSTED: "POSTED",
+  VOID: "VOID",
+} as const;
+
+export const PAYMENT_TERMS = {
+  CASH: "CASH",
+  CREDIT: "CREDIT",
+} as const;
+
+export type ItemType = keyof typeof ITEM_TYPES;
+export type TransactionStatus = keyof typeof TRANSACTION_STATUS;
+export type PaymentTerm = keyof typeof PAYMENT_TERMS;

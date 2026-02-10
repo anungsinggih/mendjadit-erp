@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
+import { Badge } from "./ui/Badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 import { Section } from "./ui/Section";
@@ -11,7 +13,7 @@ import { Icons } from "./ui/Icons";
 import { Alert } from "./ui/Alert";
 import { getErrorMessage } from "../lib/errors";
 
-type Account = { id: string; code: string; name: string };
+type Account = { id: string; code: string; name: string; account_type: string };
 type Line = {
   account_id: string;
   debit: string;
@@ -20,6 +22,7 @@ type Line = {
 };
 
 export default function ManualJournal() {
+  const navigate = useNavigate();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [lines, setLines] = useState<Line[]>([
     { account_id: "", debit: "", credit: "", memo: "" },
@@ -37,7 +40,7 @@ export default function ManualJournal() {
     const loadAccounts = async () => {
       const { data, error } = await supabase
         .from("accounts")
-        .select("id, code, name")
+        .select("id, code, name, account_type")
         .eq("is_active", true)
         .order("code", { ascending: true });
       if (error) {
@@ -111,6 +114,8 @@ export default function ManualJournal() {
         { account_id: "", debit: "", credit: "", memo: "" },
         { account_id: "", debit: "", credit: "", memo: "" },
       ]);
+      // Redirect to list
+      navigate("/journals");
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Gagal membuat jurnal manual"));
     } finally {
@@ -119,7 +124,7 @@ export default function ManualJournal() {
   };
 
   return (
-    <div className="w-full space-y-6 pb-20">
+    <div className="w-full max-w-6xl mx-auto space-y-6 px-3 sm:px-4 lg:px-6 pb-20">
       <PageHeader
         title="Jurnal Umum"
         description="Input jurnal operasional harian (manual)."
@@ -180,8 +185,15 @@ export default function ManualJournal() {
                       options={[
                         { label: "-- Select Account --", value: "" },
                         ...accounts.map((a) => ({
-                          label: `${a.code} - ${a.name}`,
+                          label: `${a.code} - ${a.name} (${a.account_type || 'ASSET'})`,
                           value: a.id,
+                          searchText: `${a.code} ${a.name} ${a.account_type || 'ASSET'}`,
+                          content: (
+                            <div className="flex items-center justify-between w-full gap-3">
+                              <span className="text-sm font-medium text-slate-700">{a.code} - {a.name}</span>
+                              <Badge variant="outline" className="text-[10px] uppercase tracking-wide px-2 py-0.5">{a.account_type || 'ASSET'}</Badge>
+                            </div>
+                          )
                         })),
                       ]}
                       className="!mb-0"

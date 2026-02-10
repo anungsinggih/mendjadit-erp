@@ -1,18 +1,15 @@
-import { useState } from "react";
-import { Alert } from "./ui/Alert";
+import { useToast } from "./ui/Toast";
 import { PurchaseEntryForm } from "./PurchaseEntryForm";
 
 export default function Purchases() {
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const { toast } = useToast();
+
   function handleSuccess(msg: string) {
-    setSuccess(msg);
-    setError(null);
+    toast(msg, 'success');
   }
 
   function handleError(msg: string) {
-    setError(msg);
-    setSuccess(null);
+    toast(msg, 'error');
   }
 
   return (
@@ -26,15 +23,13 @@ export default function Purchases() {
             Draft = editable, Posted = locked
           </span>
         </div>
-        {error && <Alert variant="error" title="Kesalahan" description={error} />}
-        {success && (
-          <Alert variant="success" title="Berhasil" description={success} />
-        )}
+      </div>
 
-        <div className="space-y-6">
-          <PurchaseEntryForm onSuccess={handleSuccess} onError={handleError} />
-        </div>
+
+      <div className="space-y-6">
+        <PurchaseEntryForm onSuccess={handleSuccess} onError={handleError} />
       </div>
     </div>
+
   );
 }

@@ -7,6 +7,7 @@ import { Icons } from './ui/Icons'
 import { formatCurrency, formatDate, safeDocNo } from '../lib/format'
 import DocumentHeaderCard from './shared/DocumentHeaderCard'
 import LineItemsTable from './shared/LineItemsTable'
+import { useConfirm } from './ui/ConfirmDialogContext'
 
 type SalesReturnDetail = {
     id: string
@@ -17,6 +18,7 @@ type SalesReturnDetail = {
     total_amount: number
     status: 'DRAFT' | 'POSTED' | 'VOID'
     notes: string | null
+    payment_method_code: string | null
     created_at: string
 }
 
@@ -39,7 +41,10 @@ export default function SalesReturnDetail() {
     const [items, setItems] = useState<ReturnItem[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [success, setSuccess] = useState<string | null>(null)
     const [posting, setPosting] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+    const { confirm } = useConfirm()
 
     const normalizeItems = useCallback((rows: ReturnItem[]) => {
         const map = new Map<string, ReturnItem>()
@@ -79,6 +84,7 @@ export default function SalesReturnDetail() {
                     sales_id,
                     total_amount,
                     status,
+                    payment_method_code,
                     notes,
                     created_at,
                     sales!sales_id (
@@ -140,18 +146,53 @@ export default function SalesReturnDetail() {
 
     async function handlePost() {
         if (!returnDoc) return
-        if (!confirm("Confirm POST Return? This handles Stock, AR & Journals.")) return
+        const ok = await confirm({
+            title: 'Post Sales Return',
+            description: 'Confirm POST Return? This handles Stock, AR & Journals.',
+            confirmText: 'POST',
+            cancelText: 'Cancel',
+            tone: 'danger'
+        })
+        if (!ok) return
 
         setPosting(true)
+        setSuccess(null)
         try {
             const { error: postError } = await supabase.rpc('rpc_post_sales_return', { p_return_id: returnDoc.id })
             if (postError) throw postError
-            alert("Return POSTED Successfully!")
+            setSuccess("Return POSTED Successfully!")
             fetchReturnDetail(returnDoc.id)
         } catch (err: unknown) {
             setError(getErrorMessage(err, 'Unknown error'))
         } finally {
             setPosting(false)
+        }
+    }
+
+    async function handleDelete() {
+        if (!returnDoc) return
+        const ok = await confirm({
+            title: 'Delete Draft Return',
+            description: 'Delete this draft return? This action cannot be undone.',
+            confirmText: 'Delete',
+            cancelText: 'Cancel',
+            tone: 'danger'
+        })
+        if (!ok) return
+        setDeleting(true)
+        setError(null)
+        try {
+            const { error: delError } = await supabase
+                .from('sales_returns')
+                .delete()
+                .eq('id', returnDoc.id)
+                .eq('status', 'DRAFT')
+            if (delError) throw delError
+            navigate('/sales-returns/history')
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, 'Failed to delete return'))
+        } finally {
+            setDeleting(false)
         }
     }
 
@@ -189,6 +230,10 @@ export default function SalesReturnDetail() {
         {
             label: 'Customer',
             value: returnDoc.customer_name,
+        },
+        {
+            label: 'Refund Method',
+            value: returnDoc.payment_method_code || 'CASH',
         },
         {
             label: 'Total',
@@ -238,6 +283,16 @@ export default function SalesReturnDetail() {
 
     return (
         <div className="w-full space-y-6">
+            {success && (
+                <div className="p-4 bg-green-50 border border-green-200 text-green-700 rounded-md flex items-center gap-2">
+                    <Icons.CheckCircle className="w-5 h-5 flex-shrink-0" /> {success}
+                </div>
+            )}
+            {error && (
+                <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
+                    <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {error}
+                </div>
+            )}
             <div className="flex justify-between items-center">
                 <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Sales Return</h2>
                 <div className="flex gap-2 no-print">
@@ -245,28 +300,38 @@ export default function SalesReturnDetail() {
                         ← Back to List
                     </Button>
                     {returnDoc.status === 'DRAFT' && (
-                        <Button onClick={handlePost} disabled={posting} className="bg-green-600 hover:bg-green-700 text-white">
-                            {posting ? 'Posting...' : 'POST Return'}
-                        </Button>
+                        <>
+                            <Button onClick={handlePost} disabled={posting} className="bg-green-600 hover:bg-green-700 text-white">
+                                {posting ? 'Posting...' : 'POST Return'}
+                            </Button>
+                            <Button onClick={handleDelete} disabled={deleting} variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                                {deleting ? 'Deleting...' : 'Delete Draft'}
+                            </Button>
+                        </>
                     )}
                 </div>
             </div>
 
-            <DocumentHeaderCard
-                title="Sales Return"
-                docNo={safeDocNo(null, returnDoc.id, true)}
-                status={returnDoc.status}
-                fields={headerFields}
-                notes={returnDoc.notes}
-            />
-
-            <LineItemsTable
-                title="Return Items"
-                rows={items}
-                columns={lineItemColumns}
-                totalValue={formatCurrency(returnDoc.total_amount)}
-                emptyLabel="No items added"
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-1 space-y-6">
+                    <DocumentHeaderCard
+                        title="Sales Return"
+                        docNo={safeDocNo(null, returnDoc.id, true)}
+                        status={returnDoc.status}
+                        fields={headerFields}
+                        notes={returnDoc.notes}
+                    />
+                </div>
+                <div className="lg:col-span-2">
+                    <LineItemsTable
+                        title="Return Items"
+                        rows={items}
+                        columns={lineItemColumns}
+                        totalValue={formatCurrency(returnDoc.total_amount)}
+                        emptyLabel="No items added"
+                    />
+                </div>
+            </div>
         </div>
     )
 }

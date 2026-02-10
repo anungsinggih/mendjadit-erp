@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../supabaseClient'
 import { Button } from './ui/Button'
+import { useConfirm } from './ui/ConfirmDialogContext'
 import { Input } from './ui/Input'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
@@ -31,6 +32,7 @@ export function SimpleMasterCRUD({ table, title, hasCode }: SimpleCRUDProps) {
     const [formData, setFormData] = useState<Partial<MasterItem>>({ name: '', code: '', is_active: true })
     const [searchTerm, setSearchTerm] = useState('')
     const [isModalOpen, setIsModalOpen] = useState(false)
+    const { confirm } = useConfirm()
 
     const filteredItems = items.filter(item =>
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -83,9 +85,23 @@ export function SimpleMasterCRUD({ table, title, hasCode }: SimpleCRUDProps) {
     }
 
     async function handleDelete(id: string) {
-        if (!confirm("Delete this item?")) return
+        const ok = await confirm({
+            title: "Delete Item",
+            description: "Delete this item? This action cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            tone: "danger",
+        })
+        if (!ok) return
         const { error } = await supabase.from(table).delete().eq('id', id)
-        if (error) alert("Could not delete (likely referenced). Try deactivating.")
+        if (error) {
+            void confirm({
+                title: "Cannot Delete",
+                description: "Could not delete (likely referenced). Try deactivating.",
+                confirmText: "OK",
+                hideCancel: true,
+            })
+        }
         else fetchItems()
     }
 

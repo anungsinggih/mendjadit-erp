@@ -4,6 +4,9 @@ import { Button } from "./ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Badge } from "./ui/Badge";
 import { Icons } from "./ui/Icons";
+import { getErrorMessage } from "../lib/errors";
+import { useNavigate } from "react-router-dom";
+import { useConfirm } from "./ui/ConfirmDialogContext";
 
 type DraftReturn = {
     id: string
@@ -22,7 +25,10 @@ type Props = {
 
 export function PurchaseReturnDraftList({ refreshTrigger, onSuccess, onError }: Props) {
     const [drafts, setDrafts] = useState<DraftReturn[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [postingId, setPostingId] = useState<string | null>(null);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
+    const navigate = useNavigate();
+    const { confirm } = useConfirm();
 
     const fetchDraftReturns = useCallback(async () => {
         const { data } = await supabase
@@ -38,17 +44,50 @@ export function PurchaseReturnDraftList({ refreshTrigger, onSuccess, onError }: 
     }, [fetchDraftReturns, refreshTrigger]);
 
     async function handlePost(retId: string) {
-        if (!confirm("Confirm POST Return? This handles Stock & Journals.")) return
-        setLoading(true)
+        const ok = await confirm({
+            title: "Post Purchase Return",
+            description: "Confirm POST Return? This handles Stock & Journals.",
+            confirmText: "POST",
+            cancelText: "Cancel",
+            tone: "danger",
+        });
+        if (!ok) return
+        setPostingId(retId)
         try {
             const { error } = await supabase.rpc('rpc_post_purchase_return', { p_return_id: retId })
             if (error) throw error
             onSuccess("Return POSTED Successfully!")
+            fetchDraftReturns()
         } catch (err: unknown) {
-            if (err instanceof Error) onError(err.message)
-            else onError('Unknown error')
+            onError(getErrorMessage(err))
         } finally {
-            setLoading(false)
+            setPostingId(null)
+        }
+    }
+
+    async function handleDelete(retId: string) {
+        const ok = await confirm({
+            title: "Delete Draft Return",
+            description: "Delete this draft return? This action cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            tone: "danger",
+        });
+        if (!ok) return
+        setDeletingId(retId)
+        try {
+            const { error } = await supabase
+                .from('purchase_returns')
+                .delete()
+                .eq('id', retId)
+                .eq('status', 'DRAFT')
+            if (error) throw error
+            onSuccess("Draft return deleted.")
+            fetchDraftReturns()
+        } catch (err: unknown) {
+            onError(getErrorMessage(err))
+        } finally {
+            setDeletingId(null)
         }
     }
 
@@ -62,7 +101,11 @@ export function PurchaseReturnDraftList({ refreshTrigger, onSuccess, onError }: 
                     <div className="p-6 text-center text-gray-500 italic">No pending drafts</div>
                 ) : (
                     <ul className="divide-y divide-gray-100">
-                        {drafts.map(d => (
+                        {drafts.map(d => {
+                            const isPosting = postingId === d.id;
+                            const isDeleting = deletingId === d.id;
+                            const isBusy = isPosting || isDeleting;
+                            return (
                             <li key={d.id} className="p-4 hover:bg-gray-50 transition-colors">
                                 <div className="flex justify-between items-start mb-2">
                                     <div>
@@ -78,24 +121,35 @@ export function PurchaseReturnDraftList({ refreshTrigger, onSuccess, onError }: 
                                         variant="primary"
                                         className="flex-1"
                                         onClick={() => handlePost(d.id)}
-                                        disabled={loading}
+                                        disabled={isBusy}
                                         icon={<Icons.CheckCircle className="w-4 h-4" />}
                                     >
-                                        Post
+                                        {isPosting ? "Posting..." : "Post"}
                                     </Button>
                                     <Button
                                         size="sm"
                                         variant="outline"
                                         className="flex-1"
-                                        onClick={() => window.location.href = `/purchase-return?draft=${d.id}`}
-                                        disabled={loading}
+                                        onClick={() => navigate(`/purchase-return?draft=${d.id}`)}
+                                        disabled={isBusy}
                                         icon={<Icons.Edit className="w-4 h-4" />}
                                     >
                                         Edit
                                     </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="flex-1 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                        onClick={() => handleDelete(d.id)}
+                                        disabled={isBusy}
+                                        icon={<Icons.Trash className="w-4 h-4" />}
+                                    >
+                                        {isDeleting ? "Deleting..." : "Delete"}
+                                    </Button>
                                 </div>
                             </li>
-                        ))}
+                            );
+                        })}
                     </ul>
                 )}
             </CardContent>
