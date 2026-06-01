@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/Dialog'
 import ItemForm from './ItemForm'
 import { ItemImportDialog } from './ItemImportDialog'
 import { usePagination } from '../hooks/usePagination'
-import { useDebounce } from '../hooks/useDebounce'
 import { Pagination } from './ui/Pagination'
 import { PageHeader } from './ui/PageHeader'
 import { Section } from './ui/Section'
@@ -128,7 +127,6 @@ export default function Items() {
     const [isBatchSaving, setIsBatchSaving] = useState(false)
 
     const [searchTerm, setSearchTerm] = useState('')
-    const debouncedSearchTerm = useDebounce(searchTerm, 300)
     const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all')
 
     const { page, setPage, pageSize } = usePagination();
@@ -136,13 +134,13 @@ export default function Items() {
 
     // Client-side search + pagination
     const filteredItems = useMemo(() => {
-        if (!debouncedSearchTerm.trim()) return allItems ?? []
-        const term = debouncedSearchTerm.toLowerCase()
+        if (!searchTerm.trim()) return allItems ?? []
+        const term = searchTerm.toLowerCase()
         return (allItems ?? []).filter(item =>
             item.name?.toLowerCase().includes(term) ||
             item.sku?.toLowerCase().includes(term)
         )
-    }, [allItems, debouncedSearchTerm])
+    }, [allItems, searchTerm])
 
     const totalCount = filteredItems.length
     const paginatedItems = useMemo(() => {
@@ -153,7 +151,7 @@ export default function Items() {
     // Reset page when filters change
     useEffect(() => {
         setPage(1)
-    }, [debouncedSearchTerm, typeFilter, setPage])
+    }, [searchTerm, typeFilter, setPage])
     const loading = isLoading || isFetching
     const fetchErrorMessage = fetchError ? getErrorMessage(fetchError) : null
     const isBatchPriceEligible = (item: Item) =>

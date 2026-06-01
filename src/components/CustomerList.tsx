@@ -24,7 +24,7 @@ interface CustomerListProps {
 
 function CustomerList({ customers, loading, onEdit, onDelete, onPrices, onView, onCreateSale, onPrefetch }: CustomerListProps) {
     const [searchTerm, setSearchTerm] = useState('')
-    const debouncedSearch = useDebounce(searchTerm, 350)
+    const debouncedSearch = useDebounce(searchTerm, 500)
 
     const filteredCustomers = useMemo(() => (
         customers.filter(c =>

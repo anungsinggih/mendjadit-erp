@@ -9,7 +9,6 @@ import { Icons } from "./ui/Icons";
 import { CustomerBadge } from "./ui/CustomerBadge";
 import { formatCurrency } from "../lib/format";
 import { getErrorMessage } from "../lib/errors";
-import { useDebounce } from "../hooks/useDebounce";
 
 type ItemRow = {
   id: string;
@@ -23,21 +22,36 @@ export default function CustomerPricePage() {
   const navigate = useNavigate();
   const [customerName, setCustomerName] = useState<string>("");
   const [customerType, setCustomerType] = useState<string>("UMUM");
-  const [items, setItems] = useState<ItemRow[]>([]);
+  const [allItems, setAllItems] = useState<ItemRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(25);
-  const [totalCount, setTotalCount] = useState(0);
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebounce(search, 350);
   const [originalPrices, setOriginalPrices] = useState<Record<string, number>>({});
   const [editedPrices, setEditedPrices] = useState<Record<string, string>>({});
   const [bulkValue, setBulkValue] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  // Client-side search + pagination — instant
+  const filteredItems = useMemo(() => {
+    if (!search.trim()) return allItems
+    const q = search.toLowerCase()
+    return allItems.filter(item =>
+      item.name?.toLowerCase().includes(q) ||
+      item.sku?.toLowerCase().includes(q)
+    )
+  }, [allItems, search])
+
+  const totalCount = filteredItems.length
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  const items = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredItems.slice(start, start + pageSize)
+  }, [filteredItems, page, pageSize])
+
+  useEffect(() => { setPage(1) }, [search])
   const dirtyCount = useMemo(() => {
     let count = 0;
     Object.keys(editedPrices).forEach((itemId) => {
@@ -88,25 +102,17 @@ export default function CustomerPricePage() {
     setLoading(true);
     setError(null);
     try {
-      let query = supabase
+      // Fetch ALL active items — client-side search handles filtering
+      const { data, error } = await supabase
         .from("items")
-        .select("id, sku, name, price_default", { count: "exact" })
+        .select("id, sku, name, price_default")
         .eq("is_active", true)
         .order("name", { ascending: true });
 
-      if (debouncedSearch) {
-        query = query.or(`name.ilike.%${debouncedSearch}%,sku.ilike.%${debouncedSearch}%`);
-      }
-
-      const from = (page - 1) * pageSize;
-      const to = from + pageSize - 1;
-
-      const { data, count, error } = await query.range(from, to);
       if (error) throw error;
 
       const rows = (data || []) as ItemRow[];
-      setItems(rows);
-      setTotalCount(count || 0);
+      setAllItems(rows);
 
       if (rows.length === 0) {
         setOriginalPrices({});
@@ -131,8 +137,7 @@ export default function CustomerPricePage() {
 
       const edited: Record<string, string> = {};
       rows.forEach((row) => {
-        edited[row.id] =
-          priceMap[row.id] !== undefined ? String(priceMap[row.id]) : "";
+        edited[row.id] = priceMap[row.id] !== undefined ? String(priceMap[row.id]) : "";
       });
       setEditedPrices(edited);
       setSelectedIds(new Set());
@@ -141,7 +146,7 @@ export default function CustomerPricePage() {
     } finally {
       setLoading(false);
     }
-  }, [customerId, page, pageSize, debouncedSearch]);
+  }, [customerId]);
 
   useEffect(() => {
     fetchCustomer();
@@ -159,7 +164,8 @@ export default function CustomerPricePage() {
       const upserts: { customer_id: string; item_id: string; price: number }[] = [];
       const deletes: string[] = [];
 
-      items.forEach((row) => {
+      // Save uses allItems — covers all pages, not just current page
+      allItems.forEach((row) => {
         const raw = editedPrices[row.id]?.trim();
         const hasOriginal = originalPrices[row.id] !== undefined;
         if (!raw) {
@@ -260,10 +266,7 @@ export default function CustomerPricePage() {
               <Input
                 placeholder="Search item / SKU..."
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
             <div className="flex items-center gap-2 text-xs text-slate-500">

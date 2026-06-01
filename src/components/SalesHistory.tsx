@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, memo } from "react";
+import { useEffect, useState, useCallback, memo, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
@@ -138,7 +138,7 @@ export default function SalesHistory() {
   const [success, setSuccess] = useState<string | null>(null);
   const [postingId, setPostingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebounce(search, 400);
+  const debouncedSearch = useDebounce(search, 300);
   const [searchParams] = useSearchParams();
   const initialStatus = searchParams.get("status");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "DRAFT" | "POSTED" | "VOID">(
@@ -152,26 +152,42 @@ export default function SalesHistory() {
   const navigate = useNavigate();
   const { confirm } = useConfirm();
 
-  const { page, setPage, pageSize, range } = usePagination();
-
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
+  const { page, setPage, pageSize } = usePagination();
 
   const {
-    data: salesData,
+    data: allSalesData,
     isLoading,
     isFetching,
     error: fetchError,
     refetch: refetchSales
   } = useSalesHistoryQuery({
-    range,
-    search: debouncedSearch,
+    range: [0, 0], // unused, kept for type compat
+    search: "",    // search handled client-side
     statusFilter,
     termsFilter,
     dateFrom,
     dateTo
   });
+
+  const allSales = allSalesData ?? []
+  const filteredSales = useMemo(() => {
+    if (!debouncedSearch.trim()) return allSales
+    const term = debouncedSearch.toLowerCase()
+    return allSales.filter(s =>
+      s.sales_no?.toLowerCase().includes(term) ||
+      s.customer_name?.toLowerCase().includes(term)
+    )
+  }, [allSales, debouncedSearch])
+
+  const totalCount = filteredSales.length
+  const sales = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredSales.slice(start, start + pageSize)
+  }, [filteredSales, page, pageSize])
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter, termsFilter, dateFrom, dateTo, setPage]);
 
   const { data: draftReturnCount = 0, refetch: refetchDraftCount } = useSalesReturnDraftCountQuery();
 
@@ -228,8 +244,6 @@ export default function SalesHistory() {
     prefetchSalesDetail(queryClient, id);
   }, [queryClient]);
 
-  const sales = salesData?.items || [];
-  const totalCount = salesData?.count || 0;
   const loading = isLoading || isFetching;
   const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? "Failed to fetch sales" : null;
 

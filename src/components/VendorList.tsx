@@ -22,7 +22,7 @@ interface VendorListProps {
 
 function VendorList({ vendors, loading, onEdit, onDelete, onView, onCreatePurchase, onPrefetch }: VendorListProps) {
     const [searchTerm, setSearchTerm] = useState('')
-    const debouncedSearch = useDebounce(searchTerm, 350)
+    const debouncedSearch = useDebounce(searchTerm, 500)
 
     const filteredVendors = useMemo(() => (
         vendors.filter(v =>

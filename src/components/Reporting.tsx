@@ -188,8 +188,19 @@ export default function Reporting() {
         return 'EXPENSE'
     }
 
+    // DB stores balances in net-debit basis (debit - credit).
+    // LIABILITY, EQUITY, REVENUE have normal credit balance → must invert for display.
+    const isNormalCredit = (row: AccountBalance) => {
+        const t = getAccountType(row)
+        return t === 'LIABILITY' || t === 'EQUITY' || t === 'REVENUE'
+    }
+
     const getDisplayedClosingBalance = (row: AccountBalance, invert = false) =>
         invert ? -row.closing_balance : row.closing_balance
+
+    // Returns the balance in its natural sign for display (positive = normal balance)
+    const displayBalance = (val: number, row: AccountBalance) =>
+        isNormalCredit(row) ? -val : val
 
     const getPeriodAmount = (row: AccountBalance) => {
         const accountType = getAccountType(row)
@@ -383,10 +394,10 @@ export default function Reporting() {
                                                     <tr key={d.account_id} className="hover:bg-indigo-50/30 transition-colors print:hover:bg-transparent">
                                                         <td className="px-6 py-3 font-mono text-xs text-slate-500 print:px-2 print:py-1">{d.code}</td>
                                                         <td className="px-6 py-3 font-medium text-slate-900 print:px-2 print:py-1">{d.name}</td>
-                                                        <td className="px-6 py-3 text-right text-slate-500 font-mono print:px-2 print:py-1">{fmt(d.opening_balance)}</td>
+                                                        <td className="px-6 py-3 text-right text-slate-500 font-mono print:px-2 print:py-1">{fmt(displayBalance(d.opening_balance, d))}</td>
                                                         <td className="px-6 py-3 text-right text-emerald-600 font-mono print:px-2 print:py-1">{fmt(d.debit_movement)}</td>
                                                         <td className="px-6 py-3 text-right text-rose-600 font-mono print:px-2 print:py-1">{fmt(d.credit_movement)}</td>
-                                                        <td className="px-6 py-3 text-right font-bold text-slate-900 font-mono print:px-2 print:py-1">{fmt(d.closing_balance)}</td>
+                                                        <td className="px-6 py-3 text-right font-bold text-slate-900 font-mono print:px-2 print:py-1">{fmt(displayBalance(d.closing_balance, d))}</td>
                                                     </tr>
                                                 ))}
                                                 {data.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-slate-400">No data available for this period.</td></tr>}

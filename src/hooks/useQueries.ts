@@ -22,13 +22,13 @@ function toSingleRelation<T>(value: T | T[] | null | undefined): T | undefined {
 
 export function useItemsQuery(params: {
   range: Range
-  search: string
   typeFilter: string
 }) {
-  const { range, search, typeFilter } = params
+  const { range, typeFilter } = params
   return useQuery({
-    queryKey: ["items", range[0], range[1], search, typeFilter],
+    queryKey: ["items", typeFilter],
     queryFn: async () => {
+      // Fetch ALL items for this typeFilter — client-side search handles filtering
       let query = supabase
         .from("items")
         .select(
@@ -39,21 +39,14 @@ export function useItemsQuery(params: {
             uom_detail:uoms(name, code),
             size:sizes(name, code),
             color:colors(name, code)
-          `,
-          { count: "exact" }
+          `
         )
-
-      if (search) {
-        query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
-      }
 
       if (typeFilter !== "all") {
         query = query.eq("type", typeFilter)
       }
 
-      const { data, error, count } = await query
-        .order("sku", { ascending: true })
-        .range(range[0], range[1])
+      const { data, error } = await query.order("sku", { ascending: true })
 
       if (error) throw error
 
@@ -85,8 +78,9 @@ export function useItemsQuery(params: {
         }
       })
 
-      return { items: normalizedItems as Item[], count: count || 0 }
+      return normalizedItems as Item[]
     },
+    staleTime: 30_000,
     placeholderData: keepPreviousData
   })
 }
@@ -106,47 +100,39 @@ export type InventoryQueryItem = {
 }
 
 export function useInventoryQuery(params: {
-  range: Range
-  search: string
   typeFilter: string
   refreshTrigger?: number
 }) {
-  const { range, search, typeFilter, refreshTrigger } = params
+  const { typeFilter, refreshTrigger } = params
   return useQuery({
-    queryKey: ["inventory", range[0], range[1], search, typeFilter, refreshTrigger],
+    queryKey: ["inventory", typeFilter, refreshTrigger],
     queryFn: async () => {
+      // Fetch ALL active items — client-side search handles filtering
       let query = supabase
         .from("items")
         .select(
-          "id, sku, name, uom, sizes(name), colors(name), inventory_stock(qty_on_hand, avg_cost)",
-          { count: "exact" }
+          "id, sku, name, uom, sizes(name), colors(name), inventory_stock(qty_on_hand, avg_cost)"
         )
         .eq("is_active", true)
-
-      if (search) {
-        query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
-      }
 
       if (typeFilter !== "ALL") {
         query = query.eq("type", typeFilter)
       }
 
-      const { data, error, count } = await query
-        .order("name")
-        .range(range[0], range[1])
+      const { data, error } = await query.order("name")
 
       if (error) throw error
 
-      const formatted =
-        (data || []).map(d => ({
-          ...d,
-          size_name: (d.sizes as unknown as { name: string } | null)?.name,
-          color_name: (d.colors as unknown as { name: string } | null)?.name,
-          inventory_stock: Array.isArray(d.inventory_stock) ? d.inventory_stock[0] : d.inventory_stock
-        })) || []
+      const formatted = (data || []).map(d => ({
+        ...d,
+        size_name: (d.sizes as unknown as { name: string } | null)?.name,
+        color_name: (d.colors as unknown as { name: string } | null)?.name,
+        inventory_stock: Array.isArray(d.inventory_stock) ? d.inventory_stock[0] : d.inventory_stock
+      }))
 
-      return { items: formatted as InventoryQueryItem[], count: count || 0 }
+      return formatted as InventoryQueryItem[]
     },
+    staleTime: 30_000,
     placeholderData: keepPreviousData
   })
 }
@@ -242,10 +228,13 @@ export function useSalesHistoryQuery(params: {
   dateFrom: string
   dateTo: string
 }) {
-  const { range, search, statusFilter, termsFilter, dateFrom, dateTo } = params
+  const { range, statusFilter, termsFilter, dateFrom, dateTo } = params
   return useQuery({
-    queryKey: ["sales-history", range[0], range[1], search, statusFilter, termsFilter, dateFrom, dateTo],
+    // search excluded from queryKey — filtering done client-side
+    queryKey: ["sales-history", statusFilter, termsFilter, dateFrom, dateTo],
     queryFn: async () => {
+      // Fetch ALL matching records for the given status/terms/date filters
+      // search is handled client-side for instant results
       let query = supabase
         .from("sales")
         .select(
@@ -266,8 +255,7 @@ export function useSalesHistoryQuery(params: {
             ar_invoices (
               outstanding_amount
             )
-          `,
-          { count: "exact" }
+          `
         )
         .order("sales_date", { ascending: false })
         .order("created_at", { ascending: false })
@@ -284,14 +272,8 @@ export function useSalesHistoryQuery(params: {
       if (dateTo) {
         query = query.lte("sales_date", dateTo)
       }
-      if (search.trim()) {
-        const q = search.trim()
-        query = query.or(`sales_no.ilike.%${q}%,customers.name.ilike.%${q}%`)
-      }
 
-      query = query.range(range[0], range[1])
-
-      const { data, error, count } = await query
+      const { data, error } = await query
       if (error) throw error
 
       const enriched =
@@ -308,8 +290,9 @@ export function useSalesHistoryQuery(params: {
           }
         }) || []
 
-      return { items: enriched as SalesRecord[], count: count || 0 }
+      return enriched as SalesRecord[]
     },
+    staleTime: 30_000,
     placeholderData: keepPreviousData
   })
 }
@@ -351,9 +334,10 @@ export function usePurchaseHistoryQuery(params: {
   dateFrom: string
   dateTo: string
 }) {
-  const { range, search, statusFilter, termsFilter, dateFrom, dateTo } = params
+  const { statusFilter, termsFilter, dateFrom, dateTo } = params
   return useQuery({
-    queryKey: ["purchase-history", range[0], range[1], search, statusFilter, termsFilter, dateFrom, dateTo],
+    // search excluded from queryKey — filtering done client-side
+    queryKey: ["purchase-history", statusFilter, termsFilter, dateFrom, dateTo],
     queryFn: async () => {
       let query = supabase
         .from("purchases")
@@ -374,8 +358,7 @@ export function usePurchaseHistoryQuery(params: {
             ap_bills (
               outstanding_amount
             )
-          `,
-          { count: "exact" }
+          `
         )
         .order("purchase_date", { ascending: false })
         .order("created_at", { ascending: false })
@@ -392,14 +375,8 @@ export function usePurchaseHistoryQuery(params: {
       if (dateTo) {
         query = query.lte("purchase_date", dateTo)
       }
-      if (search.trim()) {
-        const q = search.trim()
-        query = query.or(`purchase_no.ilike.%${q}%,vendors.name.ilike.%${q}%`)
-      }
 
-      query = query.range(range[0], range[1])
-
-      const { data, error, count } = await query
+      const { data, error } = await query
       if (error) throw error
 
       const enriched =
@@ -415,8 +392,9 @@ export function usePurchaseHistoryQuery(params: {
           }
         }) || []
 
-      return { items: enriched as PurchaseRecord[], count: count || 0 }
+      return enriched as PurchaseRecord[]
     },
+    staleTime: 30_000,
     placeholderData: keepPreviousData
   })
 }

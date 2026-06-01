@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 import {
     Table,
@@ -10,12 +10,8 @@ import {
 } from "./ui/Table";
 import { Button } from "./ui/Button";
 import { ResponsiveTable } from './ui/ResponsiveTable';
-import { useDebounce } from "../hooks/useDebounce";
-// import { Section } from "./ui/Section";
 import { Icons } from "./ui/Icons";
-// import { Input } from "./ui/Input";
 import { Card, CardContent } from "./ui/Card";
-// import { ButtonSelect } from "./ui/ButtonSelect";
 
 type AR = {
     id: string;
@@ -35,13 +31,22 @@ type Props = {
 };
 
 export function FinanceARList({ selectedId, onSelect, refreshTrigger, initialSelectedId }: Props) {
-    const [arList, setArList] = useState<AR[]>([]);
+    const [arListRaw, setArListRaw] = useState<AR[]>([]);
     const [loading, setLoading] = useState(false);
     const [search, setSearch] = useState("");
-    const debouncedSearch = useDebounce(search, 350);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [statusFilter, setStatusFilter] = useState("OUTSTANDING");
+
+    // Client-side instant search — no debounce needed, data already in memory
+    const arList = useMemo(() => {
+        if (!search.trim()) return arListRaw
+        const q = search.toLowerCase()
+        return arListRaw.filter(item =>
+            item.invoice_no?.toLowerCase().includes(q) ||
+            item.customer?.name?.toLowerCase().includes(q)
+        )
+    }, [arListRaw, search])
 
     // Auto-search and select from prop (Deep Linking)
     useEffect(() => {
@@ -75,32 +80,18 @@ export function FinanceARList({ selectedId, onSelect, refreshTrigger, initialSel
                 query = query.eq("status", statusFilter);
             }
 
-            // Apply date filters
             if (dateFrom) query = query.gte("invoice_date", dateFrom);
             if (dateTo) query = query.lte("invoice_date", dateTo);
 
             const { data, error } = await query;
-
             if (error) throw error;
-
-            let filtered = data || [];
-
-            // Client-side search for related checks if basic OR query is hard
-            if (debouncedSearch) {
-                const q = debouncedSearch.toLowerCase();
-                filtered = filtered.filter(item =>
-                    (item.invoice_no?.toLowerCase().includes(q)) ||
-                    (item.customer?.name?.toLowerCase().includes(q))
-                );
-            }
-
-            setArList(filtered);
+            setArListRaw(data || []);
         } catch (err) {
             console.error(err);
         } finally {
             setLoading(false);
         }
-    }, [debouncedSearch, dateFrom, dateTo, statusFilter]);
+    }, [dateFrom, dateTo, statusFilter]);
 
     useEffect(() => {
         fetchAR();

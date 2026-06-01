@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, memo } from "react";
+import { useEffect, useState, useCallback, memo, useMemo } from "react";
 import type { MouseEvent } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/Table";
 import { Button } from "./ui/Button";
@@ -6,13 +6,12 @@ import { Input } from "./ui/Input";
 import { Icons } from "./ui/Icons";
 import { Badge } from "./ui/Badge";
 import { usePagination } from "../hooks/usePagination";
+import { useDebounce } from "../hooks/useDebounce";
 import { Pagination } from "./ui/Pagination";
 import { Section } from "./ui/Section";
 import { ButtonSelect } from "./ui/ButtonSelect";
-import { useDebounce } from "../hooks/useDebounce";
 import { useInventoryQuery, type InventoryQueryItem } from "../hooks/useQueries";
 import * as XLSX from "xlsx";
-import { supabase } from "../supabaseClient";
 import { useConfirm } from "./ui/ConfirmDialogContext";
 import { getErrorMessage } from "../lib/errors";
 
@@ -85,70 +84,38 @@ const InventoryRow = memo(function InventoryRow({ item, isSelected, onSelect, on
 
 export function InventoryList({ selectedId, onSelect, onAdjust, refreshTrigger }: Props) {
     const [search, setSearch] = useState("")
+    const debouncedSearch = useDebounce(search, 300)
     const [typeFilter, setTypeFilter] = useState("ALL")
     const [isExporting, setIsExporting] = useState(false)
     const { confirm } = useConfirm()
-    const debouncedSearch = useDebounce(search, 350)
 
-    const { page, setPage, pageSize, range } = usePagination({ defaultPageSize: 20 });
-    const { data, isLoading, isFetching } = useInventoryQuery({
-        range,
-        search: debouncedSearch,
-        typeFilter,
-        refreshTrigger
-    })
+    const { page, setPage, pageSize } = usePagination({ defaultPageSize: 20 });
+    const { data: allItems, isLoading, isFetching } = useInventoryQuery({ typeFilter, refreshTrigger })
 
-    // Reset page on search
-    useEffect(() => {
-        setPage(1);
-    }, [debouncedSearch, typeFilter, setPage]);
+    const filtered = useMemo(() => {
+        if (!debouncedSearch.trim()) return allItems ?? []
+        const term = debouncedSearch.toLowerCase()
+        return (allItems ?? []).filter(item =>
+            item.name?.toLowerCase().includes(term) ||
+            item.sku?.toLowerCase().includes(term)
+        )
+    }, [allItems, debouncedSearch])
 
-    // Derived state for display
-    const filtered = data?.items || [];
-    const pageCount = data?.count || 0;
+    const pageCount = filtered.length
+    const paginatedItems = useMemo(() => {
+        const start = (page - 1) * pageSize
+        return filtered.slice(start, start + pageSize)
+    }, [filtered, page, pageSize])
+
+    useEffect(() => { setPage(1) }, [debouncedSearch, typeFilter, setPage])
+
     const loading = isLoading || isFetching;
 
     const handleExportXlsx = useCallback(async () => {
         setIsExporting(true)
         try {
-            const batchSize = 1000
-            let from = 0
-            const rows: InventoryQueryItem[] = []
-
-            while (true) {
-                let query = supabase
-                    .from("items")
-                    .select(
-                        "id, sku, name, uom, sizes(name), colors(name), inventory_stock(qty_on_hand, avg_cost)"
-                    )
-                    .eq("is_active", true)
-
-                if (debouncedSearch) {
-                    query = query.or(`name.ilike.%${debouncedSearch}%,sku.ilike.%${debouncedSearch}%`)
-                }
-
-                if (typeFilter !== "ALL") {
-                    query = query.eq("type", typeFilter)
-                }
-
-                const { data: batchData, error } = await query
-                    .order("name")
-                    .range(from, from + batchSize - 1)
-
-                if (error) throw error
-
-                const batch = (batchData || []).map(d => ({
-                    ...d,
-                    size_name: (d.sizes as unknown as { name: string } | null)?.name,
-                    color_name: (d.colors as unknown as { name: string } | null)?.name,
-                    inventory_stock: Array.isArray(d.inventory_stock) ? d.inventory_stock[0] : d.inventory_stock
-                })) as InventoryQueryItem[]
-
-                rows.push(...batch)
-
-                if (batch.length < batchSize) break
-                from += batchSize
-            }
+            // Use already-filtered client-side data
+            const rows = filtered
 
             if (rows.length === 0) {
                 await confirm({
@@ -198,7 +165,7 @@ export function InventoryList({ selectedId, onSelect, onAdjust, refreshTrigger }
         } finally {
             setIsExporting(false)
         }
-    }, [confirm, debouncedSearch, typeFilter])
+    }, [confirm, filtered])
 
     return (
         <Section
@@ -269,7 +236,7 @@ export function InventoryList({ selectedId, onSelect, onAdjust, refreshTrigger }
                             ) : filtered.length === 0 ? (
                                 <TableRow><TableCell colSpan={5} className="text-center py-12 text-slate-400 italic">No items found</TableCell></TableRow>
                             ) : (
-                                filtered.map(item => (
+                                paginatedItems.map(item => (
                                     <InventoryRow
                                         key={item.id}
                                         item={item}

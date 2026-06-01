@@ -4,12 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card'
 import { Input } from './ui/Input'
 import { Button } from './ui/Button'
 import { Icons } from './ui/Icons'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { usePagination } from '../hooks/usePagination'
 import { Pagination } from './ui/Pagination'
 import { formatCurrency, formatDate, toNumber } from '../lib/format'
 import { getErrorMessage } from '../lib/errors'
-import { useDebounce } from '../hooks/useDebounce'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 
 type JournalEntry = {
@@ -153,52 +152,29 @@ const JournalEntryItem = memo(function JournalEntryItem({
 })
 
 export default function Journals() {
-    const location = useLocation()
-    const searchTerm = useMemo(() => new URLSearchParams(location.search).get('q') || '', [location.search])
-    const debouncedSearchTerm = useDebounce(searchTerm, 350)
+    const [searchInput, setSearchInput] = useState('')
     const [startDate, setStartDate] = useState('')
     const [endDate, setEndDate] = useState('')
     const [openJournalId, setOpenJournalId] = useState<string | null>(null)
     const navigate = useNavigate()
 
-    const { page, setPage, pageSize, range } = usePagination({ defaultPageSize: 25 })
+    const { page, setPage, pageSize } = usePagination({ defaultPageSize: 25 })
 
     const handleToggle = useCallback((id: string) => {
         setOpenJournalId(prev => (prev === id ? null : id))
     }, [])
 
-    const handleSearchChange = useCallback((value: string) => {
-        const params = new URLSearchParams(location.search)
-        if (value) {
-            params.set('q', value)
-        } else {
-            params.delete('q')
-        }
-        const next = params.toString()
-        navigate({ search: next ? `?${next}` : '' }, { replace: true })
-    }, [location.search, navigate])
-
-    const { data: journalData, isLoading, isFetching, error: fetchError, refetch } = useQuery({
-        queryKey: ['journals', range[0], range[1]],
+    // Fetch ALL journals once — no server-side search/pagination
+    const { data: allJournals, isLoading, isFetching, error: fetchError, refetch } = useQuery({
+        queryKey: ['journals'],
         queryFn: async () => {
-            const { data: journalsData, error: journalsError, count } = await supabase
+            // Fetch journals + lines + accounts in one query via nested select
+            const { data: journalsData, error: journalsError } = await supabase
                 .from('journals')
-                .select('*', { count: 'exact' })
-                .order('journal_date', { ascending: false })
-                .order('created_at', { ascending: false })
-                .range(range[0], range[1])
-
-            if (journalsError) throw journalsError
-
-            const journalsList = journalsData || []
-            const journalIds = journalsList.map(journal => journal.id).filter(Boolean)
-
-            const { data: linesData, error: linesError } = journalIds.length
-                ? await supabase
-                    .from('journal_lines')
-                    .select(`
+                .select(`
+                    *,
+                    journal_lines (
                         id,
-                        journal_id,
                         account_id,
                         debit,
                         credit,
@@ -206,68 +182,27 @@ export default function Journals() {
                             code,
                             name
                         )
-                    `)
-                    .in('journal_id', journalIds)
-                : { data: [], error: null }
+                    )
+                `)
+                .order('journal_date', { ascending: false })
+                .order('created_at', { ascending: false })
 
-            if (linesError) throw linesError
+            if (journalsError) throw journalsError
 
-            const linesMap: { [key: string]: JournalLine[] } = {}
-            linesData?.forEach((line) => {
-                if (!linesMap[line.journal_id]) {
-                    linesMap[line.journal_id] = []
-                }
-
-                const account = Array.isArray(line.accounts) ? line.accounts[0] : line.accounts
-
-                linesMap[line.journal_id].push({
-                    id: line.id,
-                    account_code: account?.code || '',
-                    account_name: account?.name || '',
-                    debit: toNumber(line.debit),
-                    credit: toNumber(line.credit)
-                })
-            })
+            const journalsList = journalsData || []
 
             const normalizeRefType = (refType?: string) => (refType || '').toLowerCase()
             const shortId = (id?: string | null) => (id ? id.substring(0, 8) : '')
 
-            const collectIds = (type: string) =>
-                journalsList
-                    .filter(j => normalizeRefType(j.ref_type) === type)
-                    .map(j => j.ref_id)
-                    .filter(Boolean)
-
-            const salesIds = collectIds('sales')
-            const purchaseIds = collectIds('purchase')
-            const salesReturnIds = collectIds('sales_return')
-            const purchaseReturnIds = collectIds('purchase_return')
-            const receiptIds = collectIds('receipt')
-            const paymentIds = collectIds('payment')
-            const periodIds = collectIds('period_close_hpp')
-
+            // Fetch all ref numbers in parallel — avoid .in() with large ID arrays
             const [salesNos, purchaseNos, salesReturnNos, purchaseReturnNos, receiptNos, paymentNos, periodNames] = await Promise.all([
-                salesIds.length
-                    ? supabase.from('sales').select('id,sales_no').in('id', salesIds)
-                    : Promise.resolve({ data: [] }),
-                purchaseIds.length
-                    ? supabase.from('purchases').select('id,purchase_no').in('id', purchaseIds)
-                    : Promise.resolve({ data: [] }),
-                salesReturnIds.length
-                    ? supabase.from('sales_returns').select('id,return_no').in('id', salesReturnIds)
-                    : Promise.resolve({ data: [] }),
-                purchaseReturnIds.length
-                    ? supabase.from('purchase_returns').select('id,return_no').in('id', purchaseReturnIds)
-                    : Promise.resolve({ data: [] }),
-                receiptIds.length
-                    ? supabase.from('receipts').select('id,receipt_no').in('id', receiptIds)
-                    : Promise.resolve({ data: [] }),
-                paymentIds.length
-                    ? supabase.from('payments').select('id,payment_no').in('id', paymentIds)
-                    : Promise.resolve({ data: [] }),
-                periodIds.length
-                    ? supabase.from('accounting_periods').select('id,name').in('id', periodIds)
-                    : Promise.resolve({ data: [] }),
+                supabase.from('sales').select('id,sales_no'),
+                supabase.from('purchases').select('id,purchase_no'),
+                supabase.from('sales_returns').select('id,return_no'),
+                supabase.from('purchase_returns').select('id,return_no'),
+                supabase.from('receipts').select('id,receipt_no'),
+                supabase.from('payments').select('id,payment_no'),
+                supabase.from('accounting_periods').select('id,name'),
             ])
 
             const salesMap = new Map((salesNos.data || []).map(row => [row.id, row.sales_no]))
@@ -294,49 +229,67 @@ export default function Journals() {
                 return shortId(refId) || `JRN-${shortId(journal.id)}`
             }
 
-            const enrichedJournals = journalsList.map(journal => ({
-                ...journal,
-                ref_display: resolveRefDisplay(journal),
-                lines: linesMap[journal.id] || []
-            }))
+            const enrichedJournals = journalsList.map(journal => {
+                const rawLines = Array.isArray(journal.journal_lines) ? journal.journal_lines : []
+                const lines: JournalLine[] = rawLines.map((line: {
+                    id: string
+                    account_id: string
+                    debit: number
+                    credit: number
+                    accounts: { code: string; name: string } | { code: string; name: string }[] | null
+                }) => {
+                    const account = Array.isArray(line.accounts) ? line.accounts[0] : line.accounts
+                    return {
+                        id: line.id,
+                        account_code: account?.code || '',
+                        account_name: account?.name || '',
+                        debit: toNumber(line.debit),
+                        credit: toNumber(line.credit),
+                    }
+                })
+                return {
+                    ...journal,
+                    ref_display: resolveRefDisplay(journal),
+                    lines,
+                }
+            })
 
-            return { items: enrichedJournals as JournalEntry[], count: count || 0 }
+            return enrichedJournals as JournalEntry[]
         },
+        staleTime: 30_000,
         placeholderData: keepPreviousData
     })
 
     const loading = isLoading || isFetching
     const fetchErrorMessage = fetchError ? getErrorMessage(fetchError, 'Failed to fetch journals') : null
-    const journals = useMemo(() => journalData?.items ?? [], [journalData])
-    const totalCount = journalData?.count ?? 0
 
+    // All client-side: search, date filter, pagination — instant
     const filteredJournals = useMemo(() => {
-        let filtered = [...journals]
+        let result = allJournals ?? []
 
-        if (debouncedSearchTerm) {
-            const term = debouncedSearchTerm.toLowerCase()
-            filtered = filtered.filter(j =>
-                j.id?.toLowerCase().includes(term) ||
+        if (startDate) result = result.filter(j => j.journal_date >= startDate)
+        if (endDate) result = result.filter(j => j.journal_date <= endDate)
+
+        if (searchInput.trim()) {
+            const term = searchInput.toLowerCase()
+            result = result.filter(j =>
                 j.memo?.toLowerCase().includes(term) ||
                 j.ref_type?.toLowerCase().includes(term) ||
-                j.ref_id?.toLowerCase().includes(term) ||
                 j.ref_display?.toLowerCase().includes(term)
             )
         }
 
-        if (startDate) {
-            filtered = filtered.filter(j => j.journal_date >= startDate)
-        }
-        if (endDate) {
-            filtered = filtered.filter(j => j.journal_date <= endDate)
-        }
+        return result
+    }, [allJournals, searchInput, startDate, endDate])
 
-        return filtered
-    }, [journals, debouncedSearchTerm, startDate, endDate])
+    const totalCount = filteredJournals.length
+    const paginatedJournals = useMemo(() => {
+        const start = (page - 1) * pageSize
+        return filteredJournals.slice(start, start + pageSize)
+    }, [filteredJournals, page, pageSize])
 
-    useEffect(() => {
-        setPage(1)
-    }, [debouncedSearchTerm, startDate, endDate, setPage])
+    // Reset page when filters change
+    useEffect(() => { setPage(1) }, [searchInput, startDate, endDate, setPage])
 
 
     const getRefTypeBadge = useCallback((refType: string) => {
@@ -362,19 +315,17 @@ export default function Journals() {
         )
     }, [])
 
-    if (loading) {
-        return (
-            <div className="w-full p-8 text-center">
-                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-                <p className="mt-2 text-gray-600">Loading journals...</p>
-            </div>
-        )
-    }
-
     return (
         <div className="w-full max-w-6xl mx-auto space-y-6 px-3 sm:px-4 lg:px-6">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Journal Entries</h2>
+                <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">
+                    Journal Entries
+                    {isFetching && !isLoading && (
+                        <span className="ml-3 inline-block align-middle">
+                            <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block"></div>
+                        </span>
+                    )}
+                </h2>
                 <div className="flex gap-2">
                     <Button
                         onClick={() => refetch()}
@@ -406,10 +357,10 @@ export default function Journals() {
                 <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                         <Input
-                            label="Search (Type / Memo / ID)"
-                            value={searchTerm}
-                            onChange={(e) => handleSearchChange(e.target.value)}
-                            placeholder="Search journals..."
+                            label="Search (Type / Memo)"
+                            value={searchInput}
+                            onChange={(e) => setSearchInput(e.target.value)}
+                            placeholder="Min. 2 karakter..."
                         />
                         <Input
                             label="Start Date"
@@ -429,9 +380,9 @@ export default function Journals() {
 
             {/* Summary */}
             <div className="flex flex-col gap-1 text-sm text-gray-600 sm:flex-row sm:justify-between sm:items-center">
-                <span>Showing <strong>{filteredJournals.length}</strong> of <strong>{journals.length}</strong> journal entries</span>
+                <span>Showing <strong>{paginatedJournals.length}</strong> of <strong>{totalCount}</strong> journal entries</span>
                 <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-                    <span>Total: {formatCurrency(journals.reduce((sum, j) => sum + j.lines.reduce((s, l) => s + toNumber(l.debit) + toNumber(l.credit), 0), 0))}</span>
+                    <span>Total: {formatCurrency(filteredJournals.reduce((sum, j) => sum + j.lines.reduce((s, l) => s + toNumber(l.debit) + toNumber(l.credit), 0), 0))}</span>
                     <span className="hidden sm:inline-block">·</span>
                     <span>Balanced count: {filteredJournals.filter(j => j.lines.reduce((s, l) => s + toNumber(l.debit), 0) === j.lines.reduce((s, l) => s + toNumber(l.credit), 0)).length}</span>
                 </div>
@@ -439,7 +390,12 @@ export default function Journals() {
 
             {/* Journal List with Accordion */}
             <div className="space-y-4">
-                {filteredJournals.length === 0 ? (
+                {isLoading ? (
+                    <div className="w-full py-16 text-center">
+                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                        <p className="mt-3 text-slate-500 text-sm">Loading journals...</p>
+                    </div>
+                ) : filteredJournals.length === 0 ? (
                     <Card>
                         <CardContent className="py-12 text-center text-gray-500">
                             <p className="text-lg flex items-center justify-center gap-2"><Icons.FileText className="w-5 h-5" /> No journal entries found</p>
@@ -447,7 +403,7 @@ export default function Journals() {
                         </CardContent>
                     </Card>
                 ) : (
-                    filteredJournals.map((journal) => (
+                    paginatedJournals.map((journal) => (
                         <JournalEntryItem
                             key={journal.id}
                             journal={journal}

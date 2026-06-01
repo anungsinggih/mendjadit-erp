@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 import {
     Table,
@@ -10,12 +10,8 @@ import {
 } from "./ui/Table";
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { Button } from "./ui/Button";
-import { useDebounce } from "../hooks/useDebounce";
-// import { Section } from "./ui/Section";
 import { Icons } from "./ui/Icons";
-// import { Input } from "./ui/Input";
 import { Card, CardContent } from "./ui/Card";
-// import { ButtonSelect } from "./ui/ButtonSelect";
 
 type AP = {
     id: string;
@@ -35,13 +31,22 @@ type Props = {
 };
 
 export function FinanceAPList({ selectedId, onSelect, refreshTrigger, initialSelectedId }: Props) {
-    const [apList, setApList] = useState<AP[]>([]);
+    const [apListRaw, setApListRaw] = useState<AP[]>([]);
     const [loading, setLoading] = useState(false);
     const [search, setSearch] = useState("");
-    const debouncedSearch = useDebounce(search, 350);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [statusFilter, setStatusFilter] = useState("OUTSTANDING");
+
+    // Client-side instant search — no debounce needed, data already in memory
+    const apList = useMemo(() => {
+        if (!search.trim()) return apListRaw
+        const q = search.toLowerCase()
+        return apListRaw.filter(item =>
+            item.bill_no?.toLowerCase().includes(q) ||
+            item.vendor?.name?.toLowerCase().includes(q)
+        )
+    }, [apListRaw, search])
 
     // Auto-search from prop (Deep Linking)
     useEffect(() => {
@@ -80,24 +85,13 @@ export function FinanceAPList({ selectedId, onSelect, refreshTrigger, initialSel
 
             const { data, error } = await query;
             if (error) throw error;
-
-            let filtered = data || [];
-
-            if (debouncedSearch) {
-                const q = debouncedSearch.toLowerCase();
-                filtered = filtered.filter(item =>
-                    (item.bill_no?.toLowerCase().includes(q)) ||
-                    (item.vendor?.name?.toLowerCase().includes(q))
-                );
-            }
-
-            setApList(filtered);
+            setApListRaw(data || []);
         } catch (err) {
             console.error(err);
         } finally {
             setLoading(false);
         }
-    }, [debouncedSearch, dateFrom, dateTo, statusFilter]);
+    }, [dateFrom, dateTo, statusFilter]);
 
     useEffect(() => {
         fetchAP();
