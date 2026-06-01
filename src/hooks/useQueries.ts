@@ -3,7 +3,6 @@ import { useQueryClient } from "@tanstack/react-query"
 import { supabase } from "../supabaseClient"
 import type { Item, Customer, Vendor } from "../types/shared"
 
-type Range = [number, number]
 type NamedRelation = { name: string }
 type NamedCodeRelation = { name: string; code: string }
 
@@ -21,10 +20,9 @@ function toSingleRelation<T>(value: T | T[] | null | undefined): T | undefined {
 }
 
 export function useItemsQuery(params: {
-  range: Range
   typeFilter: string
 }) {
-  const { range, typeFilter } = params
+  const { typeFilter } = params
   return useQuery({
     queryKey: ["items", typeFilter],
     queryFn: async () => {
@@ -221,14 +219,12 @@ type SalesRecord = {
 }
 
 export function useSalesHistoryQuery(params: {
-  range: Range
-  search: string
   statusFilter: string
   termsFilter: string
   dateFrom: string
   dateTo: string
 }) {
-  const { range, statusFilter, termsFilter, dateFrom, dateTo } = params
+  const { statusFilter, termsFilter, dateFrom, dateTo } = params
   return useQuery({
     // search excluded from queryKey — filtering done client-side
     queryKey: ["sales-history", statusFilter, termsFilter, dateFrom, dateTo],
@@ -327,8 +323,6 @@ type PurchaseRecord = {
 }
 
 export function usePurchaseHistoryQuery(params: {
-  range: Range
-  search: string
   statusFilter: string
   termsFilter: string
   dateFrom: string

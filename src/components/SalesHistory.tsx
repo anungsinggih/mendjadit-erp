@@ -161,8 +161,6 @@ export default function SalesHistory() {
     error: fetchError,
     refetch: refetchSales
   } = useSalesHistoryQuery({
-    range: [0, 0], // unused, kept for type compat
-    search: "",    // search handled client-side
     statusFilter,
     termsFilter,
     dateFrom,
