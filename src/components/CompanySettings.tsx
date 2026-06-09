@@ -53,6 +53,9 @@ export default function CompanySettings() {
     // User Profile State
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
     const [userLoading, setUserLoading] = useState(true)
+
+    // Role gate
+    const isOwner = userProfile?.role === 'OWNER'
     const [userSaving, setUserSaving] = useState(false)
     const [userMessage, setUserMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
@@ -393,18 +396,22 @@ export default function CompanySettings() {
                 >
                     <Icons.Users className="w-4 h-4" /> User Profile
                 </button>
+                {isOwner && (
                 <button
                     onClick={() => setActiveTab('company')}
                     className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${activeTab === 'company' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/50'}`}
                 >
                     <Icons.Settings className="w-4 h-4" /> Company Profile
                 </button>
+                )}
+                {isOwner && (
                 <button
                     onClick={() => setActiveTab('banks')}
                     className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${activeTab === 'banks' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/50'}`}
                 >
                     <Icons.DollarSign className="w-4 h-4" /> Bank Accounts
                 </button>
+                )}
                 {isSystemAvailable && (
                     <button
                         onClick={() => setActiveTab('system')}
@@ -447,7 +454,7 @@ export default function CompanySettings() {
                 )}
 
                 {/* COMPANY PROFILE TAB */}
-                {activeTab === 'company' && (
+                {isOwner && activeTab === 'company' && (
                     <form onSubmit={handleSaveCompany}>
                         <Section title="Company Profile" description="These details will appear on your printed invoices.">
                             <div className="space-y-6">
@@ -498,7 +505,7 @@ export default function CompanySettings() {
                 )}
 
                 {/* BANKS TAB */}
-                {activeTab === 'banks' && (
+                {isOwner && activeTab === 'banks' && (
                     <Section title="Bank Accounts" description="Manage bank accounts used for invoice payments.">
                         <div className="space-y-6">
                             {message && activeTab === 'banks' && (
@@ -597,7 +604,7 @@ export default function CompanySettings() {
                 )}
 
                 {/* SYSTEM TAB (DEV ONLY) */}
-                {activeTab === 'system' && isSystemAvailable && (
+                {isOwner && activeTab === 'system' && isSystemAvailable && (
                     <div className="space-y-6">
                         {userProfile?.role === 'OWNER' && (
                             <Section title="Invite Users (Whitelist)" description="Invite-only signup. Admin must be whitelisted before sign up.">
