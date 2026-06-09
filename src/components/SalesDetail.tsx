@@ -18,10 +18,10 @@ import { CustomerBadge } from "./ui/CustomerBadge";
 import { Alert } from "./ui/Alert";
 import { Icons } from "./ui/Icons";
 import RelatedDocumentsCard, { type RelatedDocumentItem } from "./shared/RelatedDocumentsCard";
-import { SalesInvoicePrint } from "./print/SalesInvoicePrint";
 import { getErrorMessage } from "../lib/errors";
-import { formatDate, safeDocNo } from "../lib/format";
+import { SalesInvoicePrint } from "./print/SalesInvoicePrint";
 import { toPng } from "html-to-image";
+import { formatDate, safeDocNo } from "../lib/format";
 
 type SalesDetail = {
   id: string;
@@ -39,6 +39,7 @@ type SalesDetail = {
   notes: string | null;
   created_at: string;
 };
+
 
 type CompanyProfile = {
   name: string;
@@ -73,7 +74,7 @@ export default function SalesDetail() {
   const returns = detailData?.returns ?? [];
   const error = fetchError ? getErrorMessage(fetchError, "Failed to fetch sales detail") : null;
 
-  // --- Company profile & banks (separate, lightweight) ---
+  // --- Company profile & banks ---
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [companyBanks, setCompanyBanks] = useState<CompanyBank[]>([]);
 
@@ -97,6 +98,73 @@ export default function SalesDetail() {
     sale?.status === "DRAFT"
       ? computedTotal
       : (sale?.total_amount ?? computedTotal);
+
+  const downloadFileName = useMemo(() => {
+    const docNo = sale?.sales_no || sale?.id || "invoice";
+    return `sales-${docNo}.png`;
+  }, [sale?.id, sale?.sales_no]);
+
+  const handleDownloadImage = async () => {
+    if (!imageRef.current) return;
+    setDownloadError(null);
+    try {
+      const source = imageRef.current;
+      const clone = source.cloneNode(true) as HTMLDivElement;
+      clone.style.position = "fixed";
+      clone.style.left = "0";
+      clone.style.top = "0";
+      clone.style.opacity = "1";
+      clone.style.zIndex = "9999";
+      clone.style.pointerEvents = "none";
+      clone.style.transform = "none";
+      clone.style.background = "#ffffff";
+      clone.style.width = "794px";
+      clone.style.maxWidth = "794px";
+      clone.style.height = "auto";
+      clone.style.maxHeight = "none";
+      document.body.appendChild(clone);
+      const captureHeight = Math.max(1, clone.scrollHeight);
+      const dataUrl = await toPng(clone, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: "#ffffff",
+        skipFonts: true,
+        width: 794,
+        height: captureHeight,
+        filter: (node) => {
+          if (node.nodeName === "STYLE") {
+            const content = (node as HTMLStyleElement).textContent || "";
+            if (content.includes("@page")) return false;
+          }
+          return true;
+        },
+        style: {
+          visibility: "visible",
+          opacity: "1",
+          transform: "none",
+          position: "static",
+          left: "0",
+          top: "0",
+          zIndex: "auto",
+          fontFamily: "Arial, sans-serif",
+        },
+      });
+      document.body.removeChild(clone);
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = downloadFileName;
+      link.click();
+    } catch (err) {
+      console.error(err);
+      if (printRef.current) {
+        const clones = Array.from(document.body.querySelectorAll("div"))
+          .filter((el) => el.style.zIndex === "9999" && el.style.position === "fixed");
+        clones.forEach((el) => el.remove());
+      }
+      setDownloadError("Gagal download invoice sebagai gambar.");
+    }
+  };
+
 
   useEffect(() => {
     if (id) {
@@ -212,72 +280,6 @@ export default function SalesDetail() {
     );
   }
 
-  const downloadFileName = useMemo(() => {
-    const docNo = sale?.sales_no || sale?.id || "invoice";
-    return `invoice-${docNo}.png`;
-  }, [sale?.id, sale?.sales_no]);
-
-  const handleDownloadImage = async () => {
-    if (!imageRef.current) return;
-    setDownloadError(null);
-    try {
-      const source = imageRef.current;
-      const clone = source.cloneNode(true) as HTMLDivElement;
-      clone.style.position = "fixed";
-      clone.style.left = "0";
-      clone.style.top = "0";
-      clone.style.opacity = "1";
-      clone.style.zIndex = "9999";
-      clone.style.pointerEvents = "none";
-      clone.style.transform = "none";
-      clone.style.background = "#ffffff";
-      clone.style.width = "794px";
-      clone.style.maxWidth = "794px";
-      clone.style.height = "auto";
-      clone.style.maxHeight = "none";
-      document.body.appendChild(clone);
-      const captureHeight = Math.max(1, clone.scrollHeight);
-      const dataUrl = await toPng(clone, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#ffffff",
-        skipFonts: true,
-        width: 794,
-        height: captureHeight,
-        filter: (node) => {
-          if (node.nodeName === "STYLE") {
-            const content = (node as HTMLStyleElement).textContent || "";
-            if (content.includes("@page")) return false;
-          }
-          return true;
-        },
-        style: {
-          visibility: "visible",
-          opacity: "1",
-          transform: "none",
-          position: "static",
-          left: "0",
-          top: "0",
-          zIndex: "auto",
-          fontFamily: "Arial, sans-serif",
-        },
-      });
-      document.body.removeChild(clone);
-      const link = document.createElement("a");
-      link.href = dataUrl;
-      link.download = downloadFileName;
-      link.click();
-    } catch (err) {
-      console.error(err);
-      if (printRef.current) {
-        // best-effort cleanup if clone appended
-        const clones = Array.from(document.body.querySelectorAll("div"))
-          .filter((el) => el.style.zIndex === "9999" && el.style.position === "fixed");
-        clones.forEach((el) => el.remove());
-      }
-      setDownloadError("Gagal download invoice sebagai gambar.");
-    }
-  };
 
   if (loading) {
     return (
@@ -330,6 +332,15 @@ export default function SalesDetail() {
                   Register Payment
                 </Button>
               )}
+            {sale.status === "POSTED" && (
+              <Button
+                onClick={() => navigate(`/sales-return?sales=${sale.id}`)}
+                variant="primary"
+                icon={<Icons.Plus className="w-4 h-4" />}
+              >
+                Create Return
+              </Button>
+            )}
             <Button
               onClick={() => window.print()}
               variant="outline"
@@ -342,17 +353,8 @@ export default function SalesDetail() {
               variant="outline"
               icon={<Icons.Image className="w-4 h-4" />}
             >
-              Download Image
+              Download Invoice
             </Button>
-            {sale.status === "POSTED" && (
-              <Button
-                onClick={() => navigate(`/sales-return?sales=${sale.id}`)}
-                variant="primary"
-                icon={<Icons.Plus className="w-4 h-4" />}
-              >
-                Create Return
-              </Button>
-            )}
             <Button
               onClick={() => navigate("/sales/history")}
               variant="outline"
@@ -432,15 +434,13 @@ export default function SalesDetail() {
             )}
           </div>
         )}
-        {downloadError && (
-          <div className="w-full">
-            <Alert variant="error" title="Gagal" description={downloadError} />
-          </div>
-        )}
         {(postError || postSuccess) && (
           <div className="w-full">
             {postError && (
               <Alert variant="error" title="Gagal" description={postError} />
+            )}
+            {downloadError && (
+              <Alert variant="error" title="Gagal" description={downloadError} />
             )}
             {postSuccess && (
               <Alert
@@ -764,6 +764,7 @@ export default function SalesDetail() {
         </div>
       </div>
 
+
       {/* --- PRINT ONLY SECTION --- */}
       {sale && (
         <div
@@ -814,6 +815,7 @@ export default function SalesDetail() {
           />
         </div>
       )}
+
     </div>
   );
 }

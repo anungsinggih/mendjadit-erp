@@ -116,8 +116,8 @@ export const PurchaseInvoicePrint: FunctionComponent<PurchaseInvoicePrintProps> 
                                 <div className="w-1/2">
                                     <div className="flex flex-col">
                                         <div className="text-3xl font-black tracking-tight leading-none text-black italic">
-                                            <span className="text-[#EE2E24]">Z</span>IYADA
-                                            <span className="text-gray-400 font-light not-italic ml-1 text-lg">SPORT</span>
+                                            <span className="text-[#EE2E24]">M</span>ENDJAHIT
+                                            <span className="text-gray-400 font-light not-italic ml-1 text-lg">konveksi</span>
                                         </div>
                                         <div className="text-[7px] font-bold tracking-[0.2em] text-[#EE2E24] uppercase mt-1 pl-1">
                                             Dare to be Different

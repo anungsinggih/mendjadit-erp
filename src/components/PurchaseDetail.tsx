@@ -392,20 +392,6 @@ export default function PurchaseDetail() {
                   Register Payment
                 </Button>
               )}
-            <Button
-              onClick={() => window.print()}
-              variant="outline"
-              icon={<Icons.Printer className="w-4 h-4" />}
-            >
-              Print
-            </Button>
-            <Button
-              onClick={handleDownloadImage}
-              variant="outline"
-              icon={<Icons.Image className="w-4 h-4" />}
-            >
-              Download Image
-            </Button>
             {purchase.status === "POSTED" && (
               <Button
                 onClick={() => navigate(`/purchase-return?purchase=${purchase.id}`)}
