@@ -1,9 +1,0 @@
-  const filteredSales = useMemo(() => {
-    const list = allSalesData ?? []
-    if (!debouncedSearch.trim()) return list
-    const term = debouncedSearch.toLowerCase()
-    return list.filter(s =>
-      s.sales_no?.toLowerCase().includes(term) ||
-      s.customer_name?.toLowerCase().includes(term)
-    )
-  }, [allSalesData, debouncedSearch])

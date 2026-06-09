@@ -1,9 +1,0 @@
-  const filteredPurchases = useMemo(() => {
-    const list = allPurchaseData ?? []
-    if (!search.trim()) return list
-    const term = search.toLowerCase()
-    return list.filter(p =>
-      p.purchase_no?.toLowerCase().includes(term) ||
-      p.vendor_name?.toLowerCase().includes(term)
-    )
-  }, [allPurchaseData, search])

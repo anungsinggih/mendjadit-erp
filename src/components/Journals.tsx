@@ -10,6 +10,7 @@ import { Pagination } from './ui/Pagination'
 import { formatCurrency, formatDate, toNumber } from '../lib/format'
 import { getErrorMessage } from '../lib/errors'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
+import { ResponsiveTable } from './ui/ResponsiveTable'
 
 type JournalEntry = {
     id: string
