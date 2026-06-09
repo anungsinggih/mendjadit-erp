@@ -11,7 +11,6 @@ export default function Login() {
     const [password, setPassword] = useState('')
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [msg, setMsg] = useState<string | null>(null)
 
     async function handleLogin(e: React.FormEvent) {
         e.preventDefault()
@@ -21,25 +20,6 @@ export default function Login() {
         // Try Sign In
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) setError(getErrorMessage(error))
-        setLoading(false)
-    }
-
-    async function handleSignUp() {
-        setLoading(true)
-        setError(null)
-        setMsg(null)
-
-        const { error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                data: { full_name: email } // Access in Trigger if needed
-            }
-        })
-
-        if (error) setError(getErrorMessage(error))
-        else setMsg("Sign Up Successful! Check your email or try Signing In (if email confirm disabled).")
-
         setLoading(false)
     }
 
@@ -59,11 +39,6 @@ export default function Login() {
                         {error && (
                             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6 flex items-center gap-2 text-sm">
                                 <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {error}
-                            </div>
-                        )}
-                        {msg && (
-                            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-6 flex items-center gap-2 text-sm">
-                                <Icons.Check className="w-5 h-5 flex-shrink-0" /> {msg}
                             </div>
                         )}
 
@@ -95,17 +70,9 @@ export default function Login() {
                         </form>
                     </CardContent>
                     <CardFooter className="flex flex-col gap-4 bg-gray-50/50 border-t border-gray-100 p-6">
-                        <div className="text-center text-sm text-gray-500">
-                            Don't have an account?
+                        <div className="text-center text-sm text-gray-400">
+                            Invite-only access. Contact your administrator.
                         </div>
-                        <Button
-                            onClick={handleSignUp}
-                            disabled={loading}
-                            variant="outline"
-                            className="w-full"
-                        >
-                            Create New Account
-                        </Button>
                     </CardFooter>
                 </Card>
 
