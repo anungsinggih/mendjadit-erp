@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../supabaseClient";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
@@ -10,6 +10,14 @@ import { Icons } from "./ui/Icons";
 import { PageHeader } from "./ui/PageHeader";
 import { EmptyState } from "./ui/EmptyState";
 import { formatCurrency, formatDate } from "../lib/format";
+import { useRouteModal } from "../hooks/useRouteModal";
+import { TransactionOverlayShell } from "./ui/TransactionOverlayShell";
+import MakloonOrderForm from "./MakloonOrderForm";
+import MakloonOrderDetail from "./MakloonOrderDetail";
+import MakloonMaterialIssueForm from "./MakloonMaterialIssueForm";
+import MakloonReceiptForm from "./MakloonReceiptForm";
+import MakloonIssueDetail from "./MakloonIssueDetail";
+import MakloonReceiptDetail from "./MakloonReceiptDetail";
 
 type MakloonOrder = {
   id: string;
@@ -33,8 +41,8 @@ export default function MakloonOrderList() {
   const [orders, setOrders] = useState<MakloonOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { modal, id, parentId, openModal, replaceModal, closeModal } = useRouteModal();
   const statusFilter = searchParams.get("status");
 
   useEffect(() => {
@@ -77,6 +85,31 @@ export default function MakloonOrderList() {
     return result;
   }, [orders, search, statusFilter]);
 
+  const handleOverlayClose = () => {
+    closeModal({ clearKeys: ["modal", "id", "parentId"] });
+  };
+
+  const overlayTitle = (() => {
+    switch (modal) {
+      case 'makloon.create':
+        return 'New Makloon Order'
+      case 'makloon.edit':
+        return 'Edit Makloon Order'
+      case 'makloon.detail':
+        return 'Makloon Order Detail'
+      case 'makloon.issue.create':
+        return 'Create Material Issue'
+      case 'makloon.issue.detail':
+        return 'Material Issue Detail'
+      case 'makloon.receipt.create':
+        return 'Create Receipt FG'
+      case 'makloon.receipt.detail':
+        return 'Receipt FG Detail'
+      default:
+        return ''
+    }
+  })();
+
   return (
     <div className="w-full space-y-6 pb-20">
       <PageHeader
@@ -84,7 +117,7 @@ export default function MakloonOrderList() {
         description="Kelola work order ke vendor konveksi."
         breadcrumbs={[{ label: "Makloon", href: "/makloon" }]}
         actions={
-          <Button onClick={() => navigate("/makloon/new")} icon={<Icons.Plus className="w-4 h-4" />}>
+          <Button onClick={() => openModal({ modal: 'makloon.create' })} icon={<Icons.Plus className="w-4 h-4" />}>
             New Makloon Order
           </Button>
         }
@@ -151,7 +184,7 @@ export default function MakloonOrderList() {
                     <TableRow
                       key={o.id}
                       className="cursor-pointer hover:bg-slate-50"
-                      onClick={() => navigate(`/makloon/${o.id}`)}
+                      onClick={() => openModal({ modal: 'makloon.detail', values: { id: o.id } })}
                     >
                       <TableCell>{formatDate(o.order_date)}</TableCell>
                       <TableCell className="font-mono text-sm">{o.order_no || o.id.substring(0, 8)}</TableCell>
@@ -169,7 +202,7 @@ export default function MakloonOrderList() {
                             <Button
                               size="icon"
                               variant="outline"
-                              onClick={() => navigate(`/makloon/${o.id}/issue`)}
+                              onClick={() => openModal({ modal: 'makloon.issue.create', values: { parentId: o.id } })}
                               icon={<Icons.Package className="w-4 h-4 text-orange-600" />}
                               title="Kirim Bahan"
                             />
@@ -178,7 +211,7 @@ export default function MakloonOrderList() {
                             <Button
                               size="icon"
                               variant="outline"
-                              onClick={() => navigate(`/makloon/${o.id}/receipt`)}
+                              onClick={() => openModal({ modal: 'makloon.receipt.create', values: { parentId: o.id } })}
                               icon={<Icons.Check className="w-4 h-4 text-green-600" />}
                               title="Terima FG"
                             />
@@ -186,7 +219,7 @@ export default function MakloonOrderList() {
                           <Button
                             size="icon"
                             variant="ghost"
-                            onClick={() => navigate(`/makloon/${o.id}`)}
+                            onClick={() => openModal({ modal: 'makloon.detail', values: { id: o.id } })}
                             icon={<Icons.Eye className="w-4 h-4" />}
                             title="Detail"
                           />
@@ -200,6 +233,71 @@ export default function MakloonOrderList() {
           )}
         </CardContent>
       </Card>
+
+      <TransactionOverlayShell
+        isOpen={Boolean(modal && overlayTitle)}
+        title={overlayTitle}
+        onClose={handleOverlayClose}
+        size={modal?.includes('create') || modal === 'makloon.edit' ? 'xwide' : 'wide'}
+      >
+        {modal === 'makloon.create' && (
+          <MakloonOrderForm
+            embedded
+            onCancel={handleOverlayClose}
+            onSaved={(savedId) => replaceModal({ modal: 'makloon.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'makloon.edit' && id && (
+          <MakloonOrderForm
+            embedded
+            orderId={id}
+            onCancel={handleOverlayClose}
+            onSaved={(savedId) => replaceModal({ modal: 'makloon.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'makloon.detail' && id && (
+          <MakloonOrderDetail
+            embedded
+            orderId={id}
+            onClose={handleOverlayClose}
+            onOpenEdit={(orderId) => replaceModal({ modal: 'makloon.edit', values: { id: orderId } })}
+            onOpenIssueCreate={(orderId) => replaceModal({ modal: 'makloon.issue.create', values: { parentId: orderId } })}
+            onOpenReceiptCreate={(orderId) => replaceModal({ modal: 'makloon.receipt.create', values: { parentId: orderId } })}
+            onOpenIssueDetail={(issueId) => replaceModal({ modal: 'makloon.issue.detail', values: { id: issueId } })}
+            onOpenReceiptDetail={(receiptId) => replaceModal({ modal: 'makloon.receipt.detail', values: { id: receiptId } })}
+          />
+        )}
+        {modal === 'makloon.issue.create' && parentId && (
+          <MakloonMaterialIssueForm
+            embedded
+            orderId={parentId}
+            onCancel={handleOverlayClose}
+            onSuccess={() => replaceModal({ modal: 'makloon.detail', values: { id: parentId } })}
+          />
+        )}
+        {modal === 'makloon.receipt.create' && parentId && (
+          <MakloonReceiptForm
+            embedded
+            orderId={parentId}
+            onCancel={handleOverlayClose}
+            onSuccess={() => replaceModal({ modal: 'makloon.detail', values: { id: parentId } })}
+          />
+        )}
+        {modal === 'makloon.issue.detail' && id && (
+          <MakloonIssueDetail
+            embedded
+            issueId={id}
+            onClose={handleOverlayClose}
+          />
+        )}
+        {modal === 'makloon.receipt.detail' && id && (
+          <MakloonReceiptDetail
+            embedded
+            receiptId={id}
+            onClose={handleOverlayClose}
+          />
+        )}
+      </TransactionOverlayShell>
     </div>
   );
 }

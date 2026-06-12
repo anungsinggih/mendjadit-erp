@@ -34,8 +34,15 @@ type ReturnItem = {
     subtotal: number
 }
 
-export default function PurchaseReturnDetail() {
-    const { id } = useParams<{ id: string }>()
+type PurchaseReturnDetailProps = {
+    returnId?: string
+    embedded?: boolean
+    onClose?: () => void
+}
+
+export default function PurchaseReturnDetail({ returnId, embedded = false, onClose }: PurchaseReturnDetailProps = {}) {
+    const { id: routeId } = useParams<{ id: string }>()
+    const id = returnId || routeId
     const navigate = useNavigate()
     const queryClient = useQueryClient()
 
@@ -98,7 +105,8 @@ export default function PurchaseReturnDetail() {
                 .eq('status', 'DRAFT')
             if (delError) throw delError
             queryClient.invalidateQueries({ queryKey: ["purchase-returns-history"] })
-            navigate('/purchase-returns/history')
+            if (embedded) onClose?.()
+            else navigate('/purchase-returns/history')
         } catch (err: unknown) {
             setActionError(getErrorMessage(err, 'Failed to delete return'))
         } finally {
@@ -123,8 +131,8 @@ export default function PurchaseReturnDetail() {
                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
                     <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {displayError || 'Return not found'}
                 </div>
-                <Button onClick={() => navigate('/purchase-returns/history')} className="mt-4">
-                    ← Back to List
+                <Button onClick={() => embedded ? onClose?.() : navigate('/purchase-returns/history')} className="mt-4">
+                    {embedded ? 'Close' : '← Back to List'}
                 </Button>
             </div>
         )
@@ -200,13 +208,13 @@ export default function PurchaseReturnDetail() {
                 </div>
             )}
             <div className="flex justify-between items-center">
-                <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return</h2>
+                {!embedded && <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return</h2>}
                 <div className="flex gap-2 no-print">
                     <Button onClick={() => window.print()} variant="outline" icon={<Icons.Printer className="w-4 h-4" />}>
                         Print
                     </Button>
-                    <Button onClick={() => navigate('/purchase-returns/history')} variant="outline">
-                        ← Back to List
+                    <Button onClick={() => embedded ? onClose?.() : navigate('/purchase-returns/history')} variant="outline">
+                        {embedded ? 'Close' : '← Back to List'}
                     </Button>
                     {returnDoc.status === 'DRAFT' && (
                         <>

@@ -62,8 +62,18 @@ type CompanyBank = {
   is_default: boolean;
 };
 
-export default function SalesDetail() {
-  const { id } = useParams<{ id: string }>();
+type SalesDetailProps = {
+  salesId?: string;
+  embedded?: boolean;
+  onClose?: () => void;
+  onOpenEdit?: (id: string) => void;
+  onOpenCreateReturn?: (salesId: string) => void;
+  onOpenReturnDetail?: (returnId: string) => void;
+};
+
+export default function SalesDetail({ salesId, embedded = false, onClose, onOpenEdit, onOpenCreateReturn, onOpenReturnDetail }: SalesDetailProps = {}) {
+  const { id: routeId } = useParams<{ id: string }>();
+  const id = salesId || routeId;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -212,7 +222,13 @@ export default function SalesDetail() {
       if (error) throw error;
       setDeleteSuccess("Draft berhasil dihapus, kembali ke daftar...");
       queryClient.invalidateQueries({ queryKey: ["sales-history"] });
-      setTimeout(() => navigate("/sales/history"), 700);
+      setTimeout(() => {
+        if (embedded) {
+          onClose?.();
+          return;
+        }
+        navigate("/sales/history");
+      }, 700);
     } catch (err: unknown) {
       if (err instanceof Error) setDeleteError(err.message);
     } finally {
@@ -299,28 +315,141 @@ export default function SalesDetail() {
           {error || "Sales not found"}
         </div>
         <Button
-          onClick={() => navigate("/sales/history")}
+          onClick={() => {
+            if (embedded) {
+              onClose?.();
+              return;
+            }
+            navigate("/sales/history")
+          }}
           className="mt-4"
           icon={<Icons.ArrowLeft className="w-4 h-4" />}
         >
-          Back to List
+          {embedded ? 'Close' : 'Back to List'}
         </Button>
       </div>
     );
   }
 
+  const handleClose = () => {
+    if (embedded) {
+      onClose?.();
+      return;
+    }
+    navigate('/sales/history')
+  }
+
+  const handleEdit = () => {
+    if (!sale) return
+    if (embedded) {
+      onOpenEdit?.(sale.id)
+      return
+    }
+    navigate(`/sales/${sale.id}/edit`)
+  }
+
+  const handleCreateReturn = () => {
+    if (!sale) return
+    if (embedded) {
+      onOpenCreateReturn?.(sale.id)
+      return
+    }
+    navigate(`/sales-return?sales=${sale.id}`)
+  }
+
   return (
     <div className="w-full space-y-6 print:space-y-0">
       <div className="flex flex-col gap-3 print:hidden">
-        <PageHeader
-          title="Sales Detail"
-          description={`Document: ${sale.sales_no || `Doc No: ${sale.id.substring(0, 8)}`} — View sales transaction details, print invoice, or manage returns.`}
-          breadcrumbs={[
-            { label: "Sales History", href: "/sales/history" },
-            { label: "Detail" }
-          ]}
-          actions={
-            <div className="flex gap-2 no-print flex-wrap">
+        {!embedded ? (
+          <PageHeader
+            title="Sales Detail"
+            description={`Document: ${sale.sales_no || `Doc No: ${sale.id.substring(0, 8)}`} — View sales transaction details, print invoice, or manage returns.`}
+            breadcrumbs={[
+              { label: "Sales History", href: "/sales/history" },
+              { label: "Detail" }
+            ]}
+            actions={
+              <div className="flex gap-2 no-print flex-wrap">
+                {sale.status === "POSTED" &&
+                  sale.terms === "CREDIT" &&
+                  relatedDocs.ar_status !== "PAID" && (
+                    <Button
+                      variant="success"
+                      onClick={() => {
+                        if (relatedDocs.ar_invoice_id) {
+                          navigate(`/finance?ar=${sale.sales_no || relatedDocs.ar_invoice_id}`);
+                        }
+                      }}
+                      icon={<Icons.DollarSign className="w-4 h-4" />}
+                    >
+                      Register Payment
+                    </Button>
+                  )}
+                {sale.status === "POSTED" && (
+                  <Button
+                    onClick={handleCreateReturn}
+                    variant="primary"
+                    icon={<Icons.Plus className="w-4 h-4" />}
+                  >
+                    Create Return
+                  </Button>
+                )}
+                <Button
+                  onClick={() => window.print()}
+                  variant="outline"
+                  icon={<Icons.Printer className="w-4 h-4" />}
+                >
+                  Print
+                </Button>
+                <Button
+                  onClick={handleDownloadImage}
+                  variant="outline"
+                  icon={<Icons.Image className="w-4 h-4" />}
+                >
+                  Download Invoice
+                </Button>
+                <Button
+                  onClick={handleClose}
+                  variant="outline"
+                  icon={<Icons.ArrowLeft className="w-4 h-4" />}
+                >
+                  Back to List
+                </Button>
+                {sale.status === "DRAFT" && (
+                  <Button
+                    onClick={handleEdit}
+                    variant="primary"
+                    icon={<Icons.Edit className="w-4 h-4" />}
+                  >
+                    Edit
+                  </Button>
+                )}
+                {sale.status === "DRAFT" && (
+                  <Button
+                    onClick={handlePostDraft}
+                    isLoading={isPosting}
+                    disabled={isPosting}
+                    variant="success"
+                    icon={<Icons.Check className="w-4 h-4" />}
+                  >
+                    Post
+                  </Button>
+                )}
+                {sale.status === "DRAFT" && (
+                  <Button
+                    variant="danger"
+                    onClick={handleDeleteDraft}
+                    isLoading={isDeleting}
+                    disabled={isDeleting}
+                  >
+                    Delete Draft
+                  </Button>
+                )}
+              </div>
+            }
+          />
+        ) : (
+          <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
               {sale.status === "POSTED" &&
                 sale.terms === "CREDIT" &&
                 relatedDocs.ar_status !== "PAID" && (
@@ -338,7 +467,7 @@ export default function SalesDetail() {
                 )}
               {sale.status === "POSTED" && (
                 <Button
-                  onClick={() => navigate(`/sales-return?sales=${sale.id}`)}
+                  onClick={handleCreateReturn}
                   variant="primary"
                   icon={<Icons.Plus className="w-4 h-4" />}
                 >
@@ -360,15 +489,15 @@ export default function SalesDetail() {
                 Download Invoice
               </Button>
               <Button
-                onClick={() => navigate("/sales/history")}
+                onClick={handleClose}
                 variant="outline"
                 icon={<Icons.ArrowLeft className="w-4 h-4" />}
               >
-                Back to List
+                Close
               </Button>
               {sale.status === "DRAFT" && (
                 <Button
-                  onClick={() => navigate(`/sales/${sale.id}/edit`)}
+                  onClick={handleEdit}
                   variant="primary"
                   icon={<Icons.Edit className="w-4 h-4" />}
                 >
@@ -397,8 +526,7 @@ export default function SalesDetail() {
                 </Button>
               )}
             </div>
-          }
-        />
+        )}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 bg-white border border-slate-200 rounded-lg p-4">
           <div className="space-y-1">
             <p className="text-[11px] uppercase tracking-wide text-slate-500">Doc No</p>
@@ -673,7 +801,13 @@ export default function SalesDetail() {
                                 <Button
                                   size="icon"
                                   variant="outline"
-                                  onClick={() => navigate(`/sales-returns/${ret.id}`)}
+                                  onClick={() => {
+                                    if (embedded) {
+                                      onOpenReturnDetail?.(ret.id)
+                                      return
+                                    }
+                                    navigate(`/sales-returns/${ret.id}`)
+                                  }}
                                   icon={<Icons.Eye className="w-4 h-4" />}
                                   aria-label="View Return"
                                   title="View"

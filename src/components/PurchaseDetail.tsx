@@ -44,8 +44,25 @@ type PurchaseItem = {
   subtotal: number;
 };
 
-export default function PurchaseDetail() {
-  const { id } = useParams<{ id: string }>();
+type PurchaseDetailProps = {
+  purchaseId?: string;
+  embedded?: boolean;
+  onClose?: () => void;
+  onOpenEdit?: (id: string) => void;
+  onOpenCreateReturn?: (purchaseId: string) => void;
+  onOpenReturnDetail?: (returnId: string) => void;
+};
+
+export default function PurchaseDetail({
+  purchaseId,
+  embedded = false,
+  onClose,
+  onOpenEdit,
+  onOpenCreateReturn,
+  onOpenReturnDetail,
+}: PurchaseDetailProps = {}) {
+  const { id: routeId } = useParams<{ id: string }>();
+  const id = purchaseId || routeId;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -144,7 +161,13 @@ export default function PurchaseDetail() {
       if (error) throw error;
       setDeleteSuccess("Draft berhasil dihapus, kembali ke daftar...");
       queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-      setTimeout(() => navigate("/purchases/history"), 700);
+      setTimeout(() => {
+        if (embedded) {
+          onClose?.();
+          return;
+        }
+        navigate("/purchases/history");
+      }, 700);
     } catch (err: unknown) {
       if (err instanceof Error) setDeleteError(err.message);
     } finally {
@@ -232,14 +255,46 @@ export default function PurchaseDetail() {
           {error || "Purchase not found"}
         </div>
         <Button
-          onClick={() => navigate("/purchases/history")}
+          onClick={() => {
+            if (embedded) {
+              onClose?.();
+              return;
+            }
+            navigate("/purchases/history")
+          }}
           className="mt-4"
           icon={<Icons.ArrowLeft className="w-4 h-4" />}
         >
-          Back to List
+          {embedded ? 'Close' : 'Back to List'}
         </Button>
       </div>
     );
+  }
+
+  const handleClose = () => {
+    if (embedded) {
+      onClose?.()
+      return
+    }
+    navigate('/purchases/history')
+  }
+
+  const handleEdit = () => {
+    if (!purchase) return
+    if (embedded) {
+      onOpenEdit?.(purchase.id)
+      return
+    }
+    navigate(`/purchases/${purchase.id}/edit`)
+  }
+
+  const handleCreateReturn = () => {
+    if (!purchase) return
+    if (embedded) {
+      onOpenCreateReturn?.(purchase.id)
+      return
+    }
+    setIsReturnModalOpen(true)
   }
 
   const headerFields = [
@@ -478,15 +533,100 @@ export default function PurchaseDetail() {
   return (
     <div className="w-full space-y-6 print:space-y-0">
       <div className="flex flex-col gap-3 print:hidden">
-        <PageHeader
-          title="Purchase Detail"
-          description={`Document: ${purchase.purchase_no || purchase.id.substring(0, 8)}`}
-          breadcrumbs={[
-            { label: "Purchase History", href: "/purchases/history" },
-            { label: "Detail" }
-          ]}
-          actions={
-            <div className="flex gap-2 no-print flex-wrap">
+        {!embedded ? (
+          <PageHeader
+            title="Purchase Detail"
+            description={`Document: ${purchase.purchase_no || purchase.id.substring(0, 8)}`}
+            breadcrumbs={[
+              { label: "Purchase History", href: "/purchases/history" },
+              { label: "Detail" }
+            ]}
+            actions={
+              <div className="flex gap-2 no-print flex-wrap">
+                {purchase.status === "POSTED" &&
+                  purchase.terms === "CREDIT" &&
+                  relatedDocs.ap_status !== "PAID" && (
+                    <Button
+                      variant="success"
+                      onClick={() => {
+                        if (relatedDocs.ap_bill_id) {
+                          navigate(`/finance?ap=${purchase.purchase_no || relatedDocs.ap_bill_id}`);
+                        }
+                      }}
+                      icon={<Icons.DollarSign className="w-4 h-4" />}
+                    >
+                      Register Payment
+                    </Button>
+                  )}
+                {purchase.status === "POSTED" && (
+                  <Button
+                    onClick={handleCreateReturn}
+                    variant="primary"
+                    icon={<Icons.Plus className="w-4 h-4" />}
+                  >
+                    Create Return
+                  </Button>
+                )}
+                <Button
+                  onClick={handleClose}
+                  variant="outline"
+                  icon={<Icons.ArrowLeft className="w-4 h-4" />}
+                >
+                  Back to List
+                </Button>
+                {purchase.status === "DRAFT" && (
+                  <Button
+                    onClick={() => window.print()}
+                    variant="outline"
+                    icon={<Icons.Printer className="w-4 h-4" />}
+                  >
+                    Print PO
+                  </Button>
+                )}
+                {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
+                  <Button
+                    onClick={handleOpenDPModal}
+                    variant="outline"
+                    icon={<Icons.DollarSign className="w-4 h-4" />}
+                  >
+                    Bayar DP
+                  </Button>
+                )}
+                {purchase.status === "DRAFT" && (
+                  <Button
+                    onClick={handlePost}
+                    disabled={isPosting}
+                    isLoading={isPosting}
+                    variant="success"
+                    icon={<Icons.Check className="w-4 h-4" />}
+                  >
+                    POST
+                  </Button>
+                )}
+                {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
+                  <Button
+                    onClick={handleEdit}
+                    variant="primary"
+                    icon={<Icons.Edit className="w-4 h-4" />}
+                  >
+                    Edit
+                  </Button>
+                )}
+                {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
+                  <Button
+                    variant="danger"
+                    onClick={handleDeleteDraft}
+                    isLoading={isDeleting}
+                    disabled={isDeleting}
+                  >
+                    Delete Draft
+                  </Button>
+                )}
+              </div>
+            }
+          />
+        ) : (
+          <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
               {purchase.status === "POSTED" &&
                 purchase.terms === "CREDIT" &&
                 relatedDocs.ap_status !== "PAID" && (
@@ -504,7 +644,7 @@ export default function PurchaseDetail() {
                 )}
               {purchase.status === "POSTED" && (
                 <Button
-                  onClick={() => setIsReturnModalOpen(true)}
+                  onClick={handleCreateReturn}
                   variant="primary"
                   icon={<Icons.Plus className="w-4 h-4" />}
                 >
@@ -512,11 +652,11 @@ export default function PurchaseDetail() {
                 </Button>
               )}
               <Button
-                onClick={() => navigate("/purchases/history")}
+                onClick={handleClose}
                 variant="outline"
                 icon={<Icons.ArrowLeft className="w-4 h-4" />}
               >
-                Back to List
+                Close
               </Button>
               {purchase.status === "DRAFT" && (
                 <Button
@@ -549,7 +689,7 @@ export default function PurchaseDetail() {
               )}
               {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
                 <Button
-                  onClick={() => navigate(`/purchases/${purchase.id}/edit`)}
+                  onClick={handleEdit}
                   variant="primary"
                   icon={<Icons.Edit className="w-4 h-4" />}
                 >
@@ -567,8 +707,7 @@ export default function PurchaseDetail() {
                 </Button>
               )}
             </div>
-          }
-        />
+        )}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 bg-white border border-slate-200 rounded-lg p-4">
           <div className="space-y-1">
             <p className="text-[11px] uppercase tracking-wide text-slate-500">Doc No</p>
@@ -729,7 +868,13 @@ export default function PurchaseDetail() {
                                 <Button
                                   size="icon"
                                   variant="outline"
-                                  onClick={() => navigate(`/purchase-returns/${ret.id}`)}
+                                  onClick={() => {
+                                    if (embedded) {
+                                      onOpenReturnDetail?.(ret.id)
+                                      return
+                                    }
+                                    navigate(`/purchase-returns/${ret.id}`)
+                                  }}
                                   icon={<Icons.Eye className="w-4 h-4" />}
                                   aria-label="View Return"
                                   title="View"
@@ -752,7 +897,7 @@ export default function PurchaseDetail() {
         </div>
       </div>
 
-      <Dialog isOpen={isReturnModalOpen} onClose={() => setIsReturnModalOpen(false)}>
+      <Dialog isOpen={!embedded && isReturnModalOpen} onClose={() => setIsReturnModalOpen(false)}>
         <DialogHeader>
           <DialogTitle>Create Purchase Return</DialogTitle>
         </DialogHeader>

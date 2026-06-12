@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
@@ -57,8 +57,15 @@ const STATUS_COLORS: Record<string, string> = {
   POSTED: "bg-green-100 text-green-700",
 };
 
-export default function MakloonReceiptDetail() {
-  const { id } = useParams();
+type MakloonReceiptDetailProps = {
+  receiptId?: string;
+  embedded?: boolean;
+  onClose?: () => void;
+};
+
+export default function MakloonReceiptDetail({ receiptId, embedded = false, onClose }: MakloonReceiptDetailProps = {}) {
+  const { id: routeId } = useParams();
+  const id = receiptId || routeId;
   const navigate = useNavigate();
   const { confirm } = useConfirm();
 
@@ -67,57 +74,73 @@ export default function MakloonReceiptDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const showError = useCallback(
+    async (message: string) => {
+      await confirm({ title: "Error", description: message, confirmText: "OK", hideCancel: true });
+    },
+    [confirm],
+  );
+
+  const fetchReceipt = useCallback(async () => {
     if (!id) return;
-    const fetch = async () => {
-      const [rRes, itemsRes] = await Promise.all([
-        supabase
-          .from("makloon_receipts")
-          .select("*, makloon_orders(order_no), vendors(name)")
-          .eq("id", id)
-          .single(),
-        supabase
-          .from("makloon_receipt_items")
-          .select("id, item_id, uom_snapshot, qty_received, jasa_per_unit, material_cost_per_unit, subtotal_jasa")
-          .eq("receipt_id", id),
-      ]);
-      if (rRes.error) {
-        setError("Receipt tidak ditemukan");
-        setLoading(false);
-        return;
-      }
 
-      const receiptItems = (itemsRes.data as ReceiptItemRow[]) || [];
-      const itemIds = [...new Set(receiptItems.map((item) => item.item_id))];
-      const itemNameMap = new Map<string, string>();
+    setLoading(true);
+    setError(null);
 
-      if (itemIds.length > 0) {
-        const { data: itemRows } = await supabase
-          .from("items")
-          .select("id, name")
-          .in("id", itemIds);
-
-        ((itemRows as ItemNameRow[]) || []).forEach((item) => {
-          itemNameMap.set(item.id, item.name);
-        });
-      }
-
-      setReceipt(rRes.data as unknown as Receipt);
-      setItems(
-        receiptItems.map((item) => ({
-          id: item.id,
-          item_name: itemNameMap.get(item.item_id) || "-",
-          uom_snapshot: item.uom_snapshot,
-          qty_received: item.qty_received,
-          jasa_per_unit: item.jasa_per_unit,
-          material_cost_per_unit: item.material_cost_per_unit,
-          subtotal_jasa: item.subtotal_jasa,
-        })),
-      );
+    const [rRes, itemsRes] = await Promise.all([
+      supabase
+        .from("makloon_receipts")
+        .select("*, makloon_orders(order_no), vendors(name)")
+        .eq("id", id)
+        .single(),
+      supabase
+        .from("makloon_receipt_items")
+        .select("id, item_id, uom_snapshot, qty_received, jasa_per_unit, material_cost_per_unit, subtotal_jasa")
+        .eq("receipt_id", id),
+    ]);
+    if (rRes.error) {
+      setError("Receipt tidak ditemukan");
       setLoading(false);
-    };
-    fetch();
+      return;
+    }
+
+    const receiptItems = (itemsRes.data as ReceiptItemRow[]) || [];
+    const itemIds = [...new Set(receiptItems.map((item) => item.item_id))];
+    const itemNameMap = new Map<string, string>();
+
+    if (itemIds.length > 0) {
+      const { data: itemRows } = await supabase
+        .from("items")
+        .select("id, name")
+        .in("id", itemIds);
+
+      ((itemRows as ItemNameRow[]) || []).forEach((item) => {
+        itemNameMap.set(item.id, item.name);
+      });
+    }
+
+    setReceipt(rRes.data as unknown as Receipt);
+    setItems(
+      receiptItems.map((item) => ({
+        id: item.id,
+        item_name: itemNameMap.get(item.item_id) || "-",
+        uom_snapshot: item.uom_snapshot,
+        qty_received: item.qty_received,
+        jasa_per_unit: item.jasa_per_unit,
+        material_cost_per_unit: item.material_cost_per_unit,
+        subtotal_jasa: item.subtotal_jasa,
+      })),
+    );
+    setLoading(false);
   }, [id]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchReceipt();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [fetchReceipt]);
 
   const handleDelete = async () => {
     const confirmed = await confirm({
@@ -127,11 +150,12 @@ export default function MakloonReceiptDetail() {
       cancelText: "Batal",
     });
     if (confirmed) {
-      const { error } = await supabase.from("makloon_receipts").delete().eq("id", id);
+      const { error } = await supabase.rpc("rpc_delete_makloon_receipt_draft", { p_receipt_id: id });
       if (error) {
-        alert(error.message);
+        await showError(error.message);
       } else {
-        navigate(`/makloon/${receipt?.makloon_order_id}`);
+        if (embedded) onClose?.();
+        else navigate(`/makloon/${receipt?.makloon_order_id}`);
       }
     }
   };
@@ -144,11 +168,11 @@ export default function MakloonReceiptDetail() {
       cancelText: "Batal",
     });
     if (confirmed) {
-      const { error } = await supabase.rpc("post_makloon_receipt", { p_receipt_id: id });
+      const { error } = await supabase.rpc("rpc_post_makloon_receipt", { p_receipt_id: id });
       if (error) {
-        alert(error.message);
+        await showError(error.message);
       } else {
-        window.location.reload();
+        await fetchReceipt();
       }
     }
   };
@@ -159,15 +183,34 @@ export default function MakloonReceiptDetail() {
 
   return (
     <div className="w-full space-y-6 pb-20">
-      <PageHeader
-        title={`Receipt FG ${receipt.receipt_no || receipt.id.substring(0, 8)}`}
-        breadcrumbs={[
-          { label: "Makloon", href: "/makloon" },
-          { label: `Order ${receipt.makloon_orders?.order_no || "Detail"}`, href: `/makloon/${receipt.makloon_order_id}` },
-          { label: "Receipt" }
-        ]}
-        actions={
-          <div className="flex gap-2">
+      {!embedded ? (
+        <PageHeader
+          title={`Receipt FG ${receipt.receipt_no || receipt.id.substring(0, 8)}`}
+          breadcrumbs={[
+            { label: "Makloon", href: "/makloon" },
+            { label: `Order ${receipt.makloon_orders?.order_no || "Detail"}`, href: `/makloon/${receipt.makloon_order_id}` },
+            { label: "Receipt" }
+          ]}
+          actions={
+            <div className="flex gap-2">
+              {receipt.status === "DRAFT" && (
+                <>
+                  <Button variant="outline" className="text-red-600 hover:bg-red-50" onClick={handleDelete} icon={<Icons.Trash className="w-4 h-4" />}>
+                    Hapus
+                  </Button>
+                  <Button onClick={handlePost} icon={<Icons.Check className="w-4 h-4" />}>
+                    Post Receipt
+                  </Button>
+                </>
+              )}
+              <Button variant="outline" onClick={() => navigate(`/makloon/${receipt.makloon_order_id}`)} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
+                Kembali
+              </Button>
+            </div>
+          }
+        />
+      ) : (
+        <div className="flex justify-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
             {receipt.status === "DRAFT" && (
               <>
                 <Button variant="outline" className="text-red-600 hover:bg-red-50" onClick={handleDelete} icon={<Icons.Trash className="w-4 h-4" />}>
@@ -178,12 +221,11 @@ export default function MakloonReceiptDetail() {
                 </Button>
               </>
             )}
-            <Button variant="outline" onClick={() => navigate(`/makloon/${receipt.makloon_order_id}`)} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
-              Kembali
+            <Button variant="outline" onClick={() => onClose?.()} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
+              Close
             </Button>
           </div>
-        }
-      />
+      )}
 
       <Card>
         <CardHeader>

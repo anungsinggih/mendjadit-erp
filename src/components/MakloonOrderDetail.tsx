@@ -148,8 +148,29 @@ function WorkflowProgress({ status }: { status: string }) {
 
 export { WorkflowProgress };
 
-export default function MakloonOrderDetail() {
-  const { id } = useParams();
+type MakloonOrderDetailProps = {
+  orderId?: string;
+  embedded?: boolean;
+  onClose?: () => void;
+  onOpenEdit?: (orderId: string) => void;
+  onOpenIssueCreate?: (orderId: string) => void;
+  onOpenReceiptCreate?: (orderId: string) => void;
+  onOpenIssueDetail?: (issueId: string) => void;
+  onOpenReceiptDetail?: (receiptId: string) => void;
+};
+
+export default function MakloonOrderDetail({
+  orderId: propOrderId,
+  embedded = false,
+  onClose,
+  onOpenEdit,
+  onOpenIssueCreate,
+  onOpenReceiptCreate,
+  onOpenIssueDetail,
+  onOpenReceiptDetail,
+}: MakloonOrderDetailProps = {}) {
+  const { id: routeId } = useParams();
+  const id = propOrderId || routeId;
   const navigate = useNavigate();
   const { confirm } = useConfirm();
 
@@ -167,6 +188,8 @@ export default function MakloonOrderDetail() {
 
   const fetchAll = useCallback(async () => {
     if (!id) return;
+
+    setError(null);
 
     const [oRes, iRes, issRes, rRes] = await Promise.all([
       supabase.from("makloon_orders").select("*, vendors(name)").eq("id", id).single(),
@@ -250,10 +273,22 @@ export default function MakloonOrderDetail() {
     return () => window.clearTimeout(timer);
   }, [fetchAll]);
 
+  const showError = useCallback(
+    async (message: string) => {
+      await confirm({ title: "Error", description: message, confirmText: "OK", hideCancel: true });
+    },
+    [confirm],
+  );
+
   const handleUpdateStatus = async (newStatus: string) => {
-    const { error } = await supabase.from("makloon_orders").update({ status: newStatus }).eq("id", id);
+    if (!id) return;
+
+    const { error } = await supabase.rpc("rpc_update_makloon_order_status", {
+      p_order_id: id,
+      p_new_status: newStatus,
+    });
     if (error) {
-      alert(error.message);
+      await showError(error.message);
     } else {
       await fetchAll();
     }
@@ -268,9 +303,7 @@ export default function MakloonOrderDetail() {
     });
     if (!confirmed) return;
 
-    const { error } = await supabase.from("makloon_orders").update({ status: "CANCELLED" }).eq("id", id);
-    if (error) alert(error.message);
-    else await fetchAll();
+    await handleUpdateStatus("CANCELLED");
   };
 
   const handleDeleteOrder = async () => {
@@ -282,9 +315,27 @@ export default function MakloonOrderDetail() {
     });
     if (!confirmed) return;
 
-    const { error } = await supabase.from("makloon_orders").delete().eq("id", id);
-    if (error) alert(error.message);
-    else navigate("/makloon/orders");
+    if (!id) return;
+
+    const { data, error } = await supabase
+      .from("makloon_orders")
+      .delete()
+      .eq("id", id)
+      .eq("status", "DRAFT")
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      await showError(error.message);
+    } else if (!data) {
+      await showError("Hanya draft order yang dapat dihapus.");
+    } else {
+      if (embedded) {
+        onClose?.();
+      } else {
+        navigate("/makloon/orders");
+      }
+    }
   };
 
   const closeFormModal = async () => {
@@ -299,25 +350,35 @@ export default function MakloonOrderDetail() {
     setDocumentLines([]);
     setDocumentLoading(true);
 
-    const { data } = await supabase.from("makloon_issue_items").select("id, item_id, uom_snapshot, qty").eq("issue_id", issue.id);
-    const rows = (data as { id: string; item_id: string; uom_snapshot: string; qty: number }[]) || [];
-    const itemIds = rows.map((row) => row.item_id);
-    const itemMap = new Map<string, string>();
+    try {
+      const { data, error } = await supabase.from("makloon_issue_items").select("id, item_id, uom_snapshot, qty").eq("issue_id", issue.id);
+      if (error) throw error;
 
-    if (itemIds.length > 0) {
-      const { data: itemRows } = await supabase.from("items").select("id, name").in("id", itemIds);
-      ((itemRows as ItemNameRow[]) || []).forEach((item) => itemMap.set(item.id, item.name));
+      const rows = (data as { id: string; item_id: string; uom_snapshot: string; qty: number }[]) || [];
+      const itemIds = rows.map((row) => row.item_id);
+      const itemMap = new Map<string, string>();
+
+      if (itemIds.length > 0) {
+        const { data: itemRows, error: itemError } = await supabase.from("items").select("id, name").in("id", itemIds);
+        if (itemError) throw itemError;
+        ((itemRows as ItemNameRow[]) || []).forEach((item) => itemMap.set(item.id, item.name));
+      }
+
+      setDocumentLines(
+        rows.map((row) => ({
+          id: row.id,
+          item_name: itemMap.get(row.item_id) || "-",
+          uom: row.uom_snapshot,
+          qty: row.qty,
+        })),
+      );
+    } catch (err: unknown) {
+      setActiveIssue(null);
+      const message = err instanceof Error ? err.message : String(err);
+      await showError(message);
+    } finally {
+      setDocumentLoading(false);
     }
-
-    setDocumentLines(
-      rows.map((row) => ({
-        id: row.id,
-        item_name: itemMap.get(row.item_id) || "-",
-        uom: row.uom_snapshot,
-        qty: row.qty,
-      })),
-    );
-    setDocumentLoading(false);
   };
 
   const openReceiptDetail = async (receipt: Receipt) => {
@@ -326,30 +387,40 @@ export default function MakloonOrderDetail() {
     setDocumentLines([]);
     setDocumentLoading(true);
 
-    const { data } = await supabase
-      .from("makloon_receipt_items")
-      .select("id, item_id, uom_snapshot, qty_received, jasa_per_unit, subtotal_jasa")
-      .eq("receipt_id", receipt.id);
-    const rows = (data as { id: string; item_id: string; uom_snapshot: string; qty_received: number; jasa_per_unit: number; subtotal_jasa: number }[]) || [];
-    const itemIds = rows.map((row) => row.item_id);
-    const itemMap = new Map<string, string>();
+    try {
+      const { data, error } = await supabase
+        .from("makloon_receipt_items")
+        .select("id, item_id, uom_snapshot, qty_received, jasa_per_unit, subtotal_jasa")
+        .eq("receipt_id", receipt.id);
+      if (error) throw error;
 
-    if (itemIds.length > 0) {
-      const { data: itemRows } = await supabase.from("items").select("id, name").in("id", itemIds);
-      ((itemRows as ItemNameRow[]) || []).forEach((item) => itemMap.set(item.id, item.name));
+      const rows = (data as { id: string; item_id: string; uom_snapshot: string; qty_received: number; jasa_per_unit: number; subtotal_jasa: number }[]) || [];
+      const itemIds = rows.map((row) => row.item_id);
+      const itemMap = new Map<string, string>();
+
+      if (itemIds.length > 0) {
+        const { data: itemRows, error: itemError } = await supabase.from("items").select("id, name").in("id", itemIds);
+        if (itemError) throw itemError;
+        ((itemRows as ItemNameRow[]) || []).forEach((item) => itemMap.set(item.id, item.name));
+      }
+
+      setDocumentLines(
+        rows.map((row) => ({
+          id: row.id,
+          item_name: itemMap.get(row.item_id) || "-",
+          uom: row.uom_snapshot,
+          qty: row.qty_received,
+          jasa_per_unit: row.jasa_per_unit,
+          subtotal_jasa: row.subtotal_jasa,
+        })),
+      );
+    } catch (err: unknown) {
+      setActiveReceipt(null);
+      const message = err instanceof Error ? err.message : String(err);
+      await showError(message);
+    } finally {
+      setDocumentLoading(false);
     }
-
-    setDocumentLines(
-      rows.map((row) => ({
-        id: row.id,
-        item_name: itemMap.get(row.item_id) || "-",
-        uom: row.uom_snapshot,
-        qty: row.qty_received,
-        jasa_per_unit: row.jasa_per_unit,
-        subtotal_jasa: row.subtotal_jasa,
-      })),
-    );
-    setDocumentLoading(false);
   };
 
   const closeDocumentModal = () => {
@@ -363,21 +434,47 @@ export default function MakloonOrderDetail() {
 
   const nextAction = (() => {
     if (order.status === "DRAFT") return { label: "Konfirmasi Order", action: () => handleUpdateStatus("ISSUED"), icon: <Icons.Check className="h-4 w-4" /> };
-    if (order.status === "ISSUED") return { label: "Kirim Bahan", action: () => setIssueFormOpen(true), icon: <Icons.Package className="h-4 w-4" /> };
-    if (order.status === "IN_PRODUCTION") return { label: "Terima FG", action: () => setReceiptFormOpen(true), icon: <Icons.Check className="h-4 w-4" /> };
+    if (order.status === "ISSUED") return { label: "Kirim Bahan", action: () => embedded ? onOpenIssueCreate?.(order.id) : setIssueFormOpen(true), icon: <Icons.Package className="h-4 w-4" /> };
+    if (order.status === "IN_PRODUCTION") return { label: "Terima FG", action: () => embedded ? onOpenReceiptCreate?.(order.id) : setReceiptFormOpen(true), icon: <Icons.Check className="h-4 w-4" /> };
     return null;
   })();
 
   return (
     <div className="w-full space-y-6 pb-20">
-      <PageHeader
-        title={`Makloon Order ${order.order_no || order.id.substring(0, 8)}`}
-        breadcrumbs={[{ label: "Makloon", href: "/makloon" }, { label: "Workspace" }]}
-        actions={
-          <div className="flex flex-wrap gap-2">
+      {!embedded ? (
+        <PageHeader
+          title={`Makloon Order ${order.order_no || order.id.substring(0, 8)}`}
+          breadcrumbs={[{ label: "Makloon", href: "/makloon" }, { label: "Workspace" }]}
+          actions={
+            <div className="flex flex-wrap gap-2">
+              {order.status === "DRAFT" && (
+                <>
+                  <Button variant="outline" onClick={() => navigate(`/makloon/${id}/edit`)} icon={<Icons.Edit className="h-4 w-4" />}>
+                    Edit Draft
+                  </Button>
+                  <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={handleDeleteOrder} icon={<Icons.Trash className="h-4 w-4" />}>
+                    Hapus
+                  </Button>
+                </>
+              )}
+              {order.status === "DRAFT" && (
+                <Button variant="danger" onClick={handleCancelOrder} icon={<Icons.Close className="h-4 w-4" />}>
+                  Batalkan
+                </Button>
+              )}
+              {nextAction && (
+                <Button onClick={nextAction.action} icon={nextAction.icon}>
+                  {nextAction.label}
+                </Button>
+              )}
+            </div>
+          }
+        />
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
             {order.status === "DRAFT" && (
               <>
-                <Button variant="outline" onClick={() => navigate(`/makloon/${id}/edit`)} icon={<Icons.Edit className="h-4 w-4" />}>
+                <Button variant="outline" onClick={() => onOpenEdit?.(order.id)} icon={<Icons.Edit className="h-4 w-4" />}>
                   Edit Draft
                 </Button>
                 <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={handleDeleteOrder} icon={<Icons.Trash className="h-4 w-4" />}>
@@ -385,7 +482,7 @@ export default function MakloonOrderDetail() {
                 </Button>
               </>
             )}
-            {(order.status === "ISSUED" || order.status === "IN_PRODUCTION") && (
+            {order.status === "DRAFT" && (
               <Button variant="danger" onClick={handleCancelOrder} icon={<Icons.Close className="h-4 w-4" />}>
                 Batalkan
               </Button>
@@ -395,9 +492,11 @@ export default function MakloonOrderDetail() {
                 {nextAction.label}
               </Button>
             )}
+            <Button variant="outline" onClick={() => onClose?.()} icon={<Icons.ArrowLeft className="h-4 w-4" />}>
+              Close
+            </Button>
           </div>
-        }
-      />
+      )}
 
       <WorkflowProgress status={order.status} />
 
@@ -510,7 +609,7 @@ export default function MakloonOrderDetail() {
         <Card>
           <CardHeader className="flex items-center justify-between">
             <CardTitle>Pengiriman Bahan ke Vendor</CardTitle>
-            <Button size="sm" variant="outline" onClick={() => setIssueFormOpen(true)} icon={<Icons.Package className="h-4 w-4" />}>
+            <Button size="sm" variant="outline" onClick={() => embedded ? onOpenIssueCreate?.(order.id) : setIssueFormOpen(true)} icon={<Icons.Package className="h-4 w-4" />}>
               Buat Issue
             </Button>
           </CardHeader>
@@ -537,7 +636,7 @@ export default function MakloonOrderDetail() {
                         <TableCell>{iss.item_count || 0} item · {iss.total_qty || 0}</TableCell>
                         <TableCell><Badge className={STATUS_COLORS[iss.status] || "bg-gray-100"}>{iss.status}</Badge></TableCell>
                         <TableCell className="text-right">
-                          <Button size="sm" variant="ghost" onClick={() => openIssueDetail(iss)} icon={<Icons.Eye className="h-4 w-4" />}>Lihat</Button>
+                          <Button size="sm" variant="ghost" onClick={() => embedded ? onOpenIssueDetail?.(iss.id) : openIssueDetail(iss)} icon={<Icons.Eye className="h-4 w-4" />}>Lihat</Button>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -551,7 +650,7 @@ export default function MakloonOrderDetail() {
         <Card>
           <CardHeader className="flex items-center justify-between">
             <CardTitle>Penerimaan Finished Good</CardTitle>
-            <Button size="sm" onClick={() => setReceiptFormOpen(true)} icon={<Icons.Check className="h-4 w-4" />}>
+            <Button size="sm" onClick={() => embedded ? onOpenReceiptCreate?.(order.id) : setReceiptFormOpen(true)} icon={<Icons.Check className="h-4 w-4" />}>
               Buat Receipt
             </Button>
           </CardHeader>
@@ -580,7 +679,7 @@ export default function MakloonOrderDetail() {
                         <TableCell><Badge className={STATUS_COLORS[r.status] || "bg-gray-100"}>{r.status}</Badge></TableCell>
                         <TableCell className="text-right">{formatCurrency(r.total_jasa)}</TableCell>
                         <TableCell className="text-right">
-                          <Button size="sm" variant="ghost" onClick={() => openReceiptDetail(r)} icon={<Icons.Eye className="h-4 w-4" />}>Lihat</Button>
+                          <Button size="sm" variant="ghost" onClick={() => embedded ? onOpenReceiptDetail?.(r.id) : openReceiptDetail(r)} icon={<Icons.Eye className="h-4 w-4" />}>Lihat</Button>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -592,7 +691,7 @@ export default function MakloonOrderDetail() {
         </Card>
       </div>
 
-      <Dialog isOpen={issueFormOpen} onClose={() => setIssueFormOpen(false)} contentClassName="max-w-5xl max-h-[90vh] overflow-y-auto">
+      <Dialog isOpen={!embedded && issueFormOpen} onClose={() => setIssueFormOpen(false)} contentClassName="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Kirim Bahan ke Vendor</DialogTitle>
         </DialogHeader>
@@ -601,7 +700,7 @@ export default function MakloonOrderDetail() {
         </DialogContent>
       </Dialog>
 
-      <Dialog isOpen={receiptFormOpen} onClose={() => setReceiptFormOpen(false)} contentClassName="max-w-5xl max-h-[90vh] overflow-y-auto">
+      <Dialog isOpen={!embedded && receiptFormOpen} onClose={() => setReceiptFormOpen(false)} contentClassName="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Terima Finished Good</DialogTitle>
         </DialogHeader>
@@ -610,7 +709,7 @@ export default function MakloonOrderDetail() {
         </DialogContent>
       </Dialog>
 
-      <Dialog isOpen={Boolean(activeIssue || activeReceipt)} onClose={closeDocumentModal} contentClassName="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <Dialog isOpen={!embedded && Boolean(activeIssue || activeReceipt)} onClose={closeDocumentModal} contentClassName="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {activeIssue ? `Material Issue ${activeIssue.issue_no || activeIssue.id.substring(0, 8)}` : `Receipt FG ${activeReceipt?.receipt_no || activeReceipt?.id.substring(0, 8)}`}

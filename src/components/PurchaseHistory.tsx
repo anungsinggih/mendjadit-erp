@@ -26,6 +26,12 @@ import { Pagination } from "./ui/Pagination";
 import { PageHeader } from "./ui/PageHeader";
 import { Section } from "./ui/Section";
 import { usePurchaseHistoryQuery, usePurchaseReturnDraftCountQuery, prefetchPurchaseDetail, useQueryClient } from "../hooks/useQueries";
+import { useRouteModal } from "../hooks/useRouteModal";
+import { TransactionOverlayShell } from "./ui/TransactionOverlayShell";
+import { PurchaseEntryForm } from "./PurchaseEntryForm";
+import PurchaseDetail from "./PurchaseDetail";
+import { PurchaseReturnForm } from "./PurchaseReturnForm";
+import PurchaseReturnDetail from "./PurchaseReturnDetail";
 
 
 type PurchaseRecord = {
@@ -146,6 +152,7 @@ export default function PurchaseHistory() {
   const [dateTo, setDateTo] = useState("");
   const navigate = useNavigate();
   const { confirm } = useConfirm();
+  const { modal, id, parentId, openModal, replaceModal, closeModal } = useRouteModal();
 
   const { page, setPage, pageSize } = usePagination();
 
@@ -273,7 +280,7 @@ export default function PurchaseHistory() {
           ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
           : "Purchase posted successfully!"
       );
-      navigate(`/purchases/${purchaseId}`);
+      replaceModal({ modal: 'purchase.detail', values: { id: purchaseId } });
     } catch (err: unknown) {
       setSuccess(null);
       if (err instanceof Error) {
@@ -286,10 +293,10 @@ export default function PurchaseHistory() {
     } finally {
       setPostingId(null);
     }
-  }, [confirm, navigate, filteredPurchases]);
+  }, [confirm, replaceModal, filteredPurchases]);
 
-  const handleOpen = useCallback((id: string) => navigate(`/purchases/${id}`), [navigate]);
-  const handleEdit = useCallback((id: string) => navigate(`/purchases/${id}/edit`), [navigate]);
+  const handleOpen = useCallback((targetId: string) => openModal({ modal: 'purchase.detail', values: { id: targetId } }), [openModal]);
+  const handleEdit = useCallback((targetId: string) => openModal({ modal: 'purchase.edit', values: { id: targetId } }), [openModal]);
 
   const queryClient = useQueryClient();
   const handlePrefetch = useCallback((id: string) => {
@@ -298,6 +305,26 @@ export default function PurchaseHistory() {
 
   const loading = isLoading || isFetching;
   const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? "Failed to fetch purchases" : null;
+  const handleOverlayClose = useCallback(() => {
+    closeModal({ clearKeys: ['modal', 'id', 'parentId', 'purchase', 'draft'] });
+  }, [closeModal]);
+
+  const overlayTitle = (() => {
+    switch (modal) {
+      case 'purchase.create':
+        return 'New Purchase'
+      case 'purchase.edit':
+        return 'Edit Purchase'
+      case 'purchase.detail':
+        return 'Purchase Detail'
+      case 'purchaseReturn.create':
+        return 'Create Purchase Return'
+      case 'purchaseReturn.detail':
+        return 'Purchase Return Detail'
+      default:
+        return ''
+    }
+  })();
 
   if (loading) {
     return (
@@ -340,7 +367,7 @@ export default function PurchaseHistory() {
               )}
             </Button>
             <Button
-              onClick={() => navigate("/purchases")}
+              onClick={() => openModal({ modal: 'purchase.create' })}
               icon={<Icons.Plus className="w-4 h-4" />}
             >
               New Purchase
@@ -490,6 +517,58 @@ export default function PurchaseHistory() {
           )}
         </CardContent>
       </Card>
+
+      <TransactionOverlayShell
+        isOpen={Boolean(modal && overlayTitle)}
+        title={overlayTitle}
+        onClose={handleOverlayClose}
+        size={modal === 'purchase.create' || modal === 'purchase.edit' || modal === 'purchaseReturn.create' ? 'xwide' : 'wide'}
+      >
+        {modal === 'purchase.create' && (
+          <PurchaseEntryForm
+            onSuccess={setSuccess}
+            onError={setError}
+            redirectOnSave={false}
+            onSaved={(savedId) => replaceModal({ modal: 'purchase.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'purchase.edit' && id && (
+          <PurchaseEntryForm
+            initialPurchaseId={id}
+            onSuccess={setSuccess}
+            onError={setError}
+            redirectOnSave={false}
+            onSaved={(savedId) => replaceModal({ modal: 'purchase.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'purchase.detail' && id && (
+          <PurchaseDetail
+            purchaseId={id}
+            embedded
+            onClose={handleOverlayClose}
+            onOpenEdit={(targetId) => replaceModal({ modal: 'purchase.edit', values: { id: targetId } })}
+            onOpenCreateReturn={(purchaseId) => replaceModal({ modal: 'purchaseReturn.create', values: { parentId: purchaseId, purchase: purchaseId } })}
+            onOpenReturnDetail={(returnId) => replaceModal({ modal: 'purchaseReturn.detail', values: { id: returnId } })}
+          />
+        )}
+        {modal === 'purchaseReturn.create' && (
+          <PurchaseReturnForm
+            onSuccess={setSuccess}
+            onError={setError}
+            embedded
+            initialPurchaseId={parentId || undefined}
+            onCancel={handleOverlayClose}
+            onSaved={(savedId) => replaceModal({ modal: 'purchaseReturn.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'purchaseReturn.detail' && id && (
+          <PurchaseReturnDetail
+            returnId={id}
+            embedded
+            onClose={handleOverlayClose}
+          />
+        )}
+      </TransactionOverlayShell>
     </div>
   );
 }

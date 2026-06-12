@@ -35,8 +35,15 @@ type ReturnItem = {
     cost_snapshot: number
 }
 
-export default function SalesReturnDetail() {
-    const { id } = useParams<{ id: string }>()
+type SalesReturnDetailProps = {
+    returnId?: string
+    embedded?: boolean
+    onClose?: () => void
+}
+
+export default function SalesReturnDetail({ returnId, embedded = false, onClose }: SalesReturnDetailProps = {}) {
+    const { id: routeId } = useParams<{ id: string }>()
+    const id = returnId || routeId
     const navigate = useNavigate()
     const queryClient = useQueryClient()
 
@@ -99,7 +106,8 @@ export default function SalesReturnDetail() {
                 .eq('status', 'DRAFT')
             if (delError) throw delError
             queryClient.invalidateQueries({ queryKey: ["sales-returns-history"] })
-            navigate('/sales-returns/history')
+            if (embedded) onClose?.()
+            else navigate('/sales-returns/history')
         } catch (err: unknown) {
             setActionError(getErrorMessage(err, 'Failed to delete return'))
         } finally {
@@ -124,8 +132,8 @@ export default function SalesReturnDetail() {
                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center gap-2">
                     <Icons.Warning className="w-5 h-5 flex-shrink-0" /> {displayError || 'Return not found'}
                 </div>
-                <Button onClick={() => navigate('/sales-returns/history')} className="mt-4">
-                    ← Back to List
+                <Button onClick={() => embedded ? onClose?.() : navigate('/sales-returns/history')} className="mt-4">
+                    {embedded ? 'Close' : '← Back to List'}
                 </Button>
             </div>
         )
@@ -207,10 +215,10 @@ export default function SalesReturnDetail() {
                 </div>
             )}
             <div className="flex justify-between items-center">
-                <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Sales Return</h2>
+                {!embedded && <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Sales Return</h2>}
                 <div className="flex gap-2 no-print">
-                    <Button onClick={() => navigate('/sales-returns/history')} variant="outline">
-                        ← Back to List
+                    <Button onClick={() => embedded ? onClose?.() : navigate('/sales-returns/history')} variant="outline">
+                        {embedded ? 'Close' : '← Back to List'}
                     </Button>
                     {returnDoc.status === 'DRAFT' && (
                         <>

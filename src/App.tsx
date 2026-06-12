@@ -12,6 +12,7 @@ import { Icons } from "./components/ui/Icons";
 import { MobileHeader } from "./components/MobileHeader";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import RouteOverlayRedirect from "./components/RouteOverlayRedirect";
 
 // Eager load only essential components
 import Login from "./components/Login";
@@ -24,29 +25,17 @@ const VendorDetail = lazy(() => import("./components/VendorDetail"));
 const CustomerPricePage = lazy(() => import("./components/CustomerPricePage"));
 const COA = lazy(() => import("./components/COA"));
 const OpeningBalance = lazy(() => import("./components/OpeningBalance"));
-const Sales = lazy(() => import("./components/Sales"));
 const SalesHistory = lazy(() => import("./components/SalesHistory"));
-const SalesDetail = lazy(() => import("./components/SalesDetail"));
-const SalesEdit = lazy(() => import("./components/SalesEdit"));
-const Purchases = lazy(() => import("./components/Purchases"));
 const PurchaseHistory = lazy(() => import("./components/PurchaseHistory"));
-const PurchaseDetail = lazy(() => import("./components/PurchaseDetail"));
-const PurchaseEdit = lazy(() => import("./components/PurchaseEdit"));
-const PurchaseReturn = lazy(() => import("./components/PurchaseReturn"));
 const PurchaseReturnHistory = lazy(
   () => import("./components/PurchaseReturnHistory"),
-);
-const PurchaseReturnDetail = lazy(
-  () => import("./components/PurchaseReturnDetail"),
 );
 const StockAdjustment = lazy(() => import("./components/StockAdjustment"));
 const StockCard = lazy(() => import("./components/StockCard"));
 const OpeningStock = lazy(() => import("./components/OpeningStock"));
-const SalesReturn = lazy(() => import("./components/SalesReturn"));
 const SalesReturnHistory = lazy(
   () => import("./components/SalesReturnHistory"),
 );
-const SalesReturnDetail = lazy(() => import("./components/SalesReturnDetail"));
 const Finance = lazy(() => import("./components/Finance"));
 const Reporting = lazy(() => import("./components/Reporting"));
 const PeriodLock = lazy(() => import("./components/PeriodLock"));
@@ -480,32 +469,32 @@ function App() {
                         )
                       }
                     />
-                    <Route path="/sales" element={<Sales />} />
+                    <Route path="/sales" element={<RouteOverlayRedirect to="/sales/history" modal="sales.create" />} />
                     <Route path="/sales/history" element={<SalesHistory />} />
-                    <Route path="/sales/:id" element={<SalesDetail />} />
-                    <Route path="/sales/:id/edit" element={<SalesEdit />} />
-                    <Route path="/sales-return" element={<SalesReturn />} />
+                    <Route path="/sales/:id" element={<RouteOverlayRedirect to="/sales/history" modal="sales.detail" valueParams={{ id: "id" }} />} />
+                    <Route path="/sales/:id/edit" element={<RouteOverlayRedirect to="/sales/history" modal="sales.edit" valueParams={{ id: "id" }} />} />
+                    <Route path="/sales-return" element={<RouteOverlayRedirect to="/sales/history" modal="salesReturn.create" />} />
                     <Route
                       path="/sales-returns/history"
                       element={<SalesReturnHistory />}
                     />
                     <Route
                       path="/sales-returns/:id"
-                      element={<SalesReturnDetail />}
+                      element={<RouteOverlayRedirect to="/sales/history" modal="salesReturn.detail" valueParams={{ id: "id" }} />}
                     />
-                    <Route path="/purchases" element={<Purchases />} />
+                    <Route path="/purchases" element={<RouteOverlayRedirect to="/purchases/history" modal="purchase.create" />} />
                     <Route
                       path="/purchases/history"
                       element={<PurchaseHistory />}
                     />
-                    <Route path="/purchases/:id" element={<PurchaseDetail />} />
+                    <Route path="/purchases/:id" element={<RouteOverlayRedirect to="/purchases/history" modal="purchase.detail" valueParams={{ id: "id" }} />} />
                     <Route
                       path="/purchases/:id/edit"
-                      element={<PurchaseEdit />}
+                      element={<RouteOverlayRedirect to="/purchases/history" modal="purchase.edit" valueParams={{ id: "id" }} />}
                     />
                     <Route
                       path="/purchase-return"
-                      element={<PurchaseReturn />}
+                      element={<RouteOverlayRedirect to="/purchases/history" modal="purchaseReturn.create" />}
                     />
                     <Route
                       path="/purchase-returns/history"
@@ -513,7 +502,7 @@ function App() {
                     />
                     <Route
                       path="/purchase-returns/:id"
-                      element={<PurchaseReturnDetail />}
+                      element={<RouteOverlayRedirect to="/purchases/history" modal="purchaseReturn.detail" valueParams={{ id: "id" }} />}
                     />
                     <Route
                       path="/finance"

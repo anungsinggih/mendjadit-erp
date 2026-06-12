@@ -36,11 +36,6 @@ type MakloonOrderItemRow = {
   jasa_per_unit: number;
 };
 
-type ItemNameRow = {
-  id: string;
-  name: string;
-};
-
 type SelectableItem = {
   id: string;
   name: string;
@@ -71,13 +66,12 @@ export default function MakloonReceiptForm({ orderId: propOrderId, embedded = fa
   useEffect(() => {
     if (!orderId) return;
     const fetch = async () => {
-      const [oRes, iRes, allRes] = await Promise.all([
+      const [oRes, iRes] = await Promise.all([
         supabase.from("makloon_orders").select("*, vendors(name)").eq("id", orderId).single(),
         supabase
           .from("makloon_order_items")
           .select("item_id, uom_snapshot, qty_ordered, jasa_per_unit")
           .eq("makloon_order_id", orderId),
-        supabase.from("items").select("id, name, uom, sku").eq("is_active", true),
       ]);
       if (oRes.error) {
         setError("Order tidak ditemukan");
@@ -85,7 +79,6 @@ export default function MakloonReceiptForm({ orderId: propOrderId, embedded = fa
       }
       const orderData = oRes.data as MakloonOrder;
       setOrder(orderData);
-      setAllSubscribedItems((allRes.data as SelectableItem[]) || []);
 
       const orderItems = (iRes.data as MakloonOrderItemRow[]) || [];
       const itemIds = [...new Set(orderItems.map((item) => item.item_id))];
@@ -94,12 +87,16 @@ export default function MakloonReceiptForm({ orderId: propOrderId, embedded = fa
       if (itemIds.length > 0) {
         const { data: itemRows } = await supabase
           .from("items")
-          .select("id, name")
+          .select("id, name, uom, sku")
           .in("id", itemIds);
 
-        ((itemRows as ItemNameRow[]) || []).forEach((item) => {
+        const selectableRows = (itemRows as SelectableItem[]) || [];
+        selectableRows.forEach((item) => {
           itemNameMap.set(item.id, item.name);
         });
+        setAllSubscribedItems(selectableRows);
+      } else {
+        setAllSubscribedItems([]);
       }
 
       if (orderItems.length > 0) {
@@ -170,19 +167,19 @@ export default function MakloonReceiptForm({ orderId: propOrderId, embedded = fa
     }
     setSaving(true);
     const payload = {
-      makloon_order_id: orderId,
-      receipt_date: receiptDate,
-      notes,
-      lines: lines.map((l) => ({
+      p_makloon_order_id: orderId,
+      p_receipt_date: receiptDate,
+      p_notes: notes || null,
+      p_lines: lines.map((l) => ({
         item_id: l.item_id,
         item_name: l.item_name,
         uom_snapshot: l.uom_snapshot,
         qty_received: l.qty_received,
         jasa_per_unit: l.jasa_per_unit,
       })),
-      post,
+      p_post: post,
     };
-    const { error: rpcError } = await supabase.rpc("create_makloon_receipt", payload);
+    const { error: rpcError } = await supabase.rpc("rpc_create_makloon_receipt", payload);
     setSaving(false);
     if (rpcError) {
       setError(rpcError.message);

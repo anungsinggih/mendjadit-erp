@@ -4,8 +4,9 @@ import { PageHeader } from "./ui/PageHeader";
 // import { Card, CardContent } from "./ui/Card";
 import { Alert } from "./ui/Alert";
 import { Icons } from "./ui/Icons";
-import { useLocation, useNavigate } from "react-router-dom";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
+import { useLocation } from "react-router-dom";
+import { TransactionOverlayShell } from "./ui/TransactionOverlayShell";
+import { useRouteModal } from "../hooks/useRouteModal";
 
 // Sub-components
 import { FinanceARList } from "./FinanceARList";
@@ -15,7 +16,6 @@ import { FinancePaymentForm } from "./FinancePaymentForm";
 
 export default function Finance() {
   const location = useLocation();
-  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -25,8 +25,8 @@ export default function Finance() {
   const [isOwner, setIsOwner] = useState(false);
   const [arAging, setArAging] = useState<{ bucket_0_30: number; bucket_31_60: number; bucket_61_plus: number } | null>(null);
   const [apAging, setApAging] = useState<{ bucket_0_30: number; bucket_31_60: number; bucket_61_plus: number } | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
   const [formType, setFormType] = useState<"AR" | "AP">("AR");
+  const { modal, openModal, replaceModal, closeModal } = useRouteModal();
 
   // Shared Form State
   const [selectedId, setSelectedId] = useState("");
@@ -87,6 +87,14 @@ export default function Finance() {
   const [initialArId, setInitialArId] = useState<string | null>(null);
   const [initialApId, setInitialApId] = useState<string | null>(null);
 
+  const handleTabChange = useCallback((tab: "AR" | "AP") => {
+    setActiveTab(tab);
+    setSelectedId("");
+    setSuccess(null);
+    setError(null);
+    closeModal({ replace: true, clearKeys: ["modal", "id", "ar", "ap"] });
+  }, [closeModal]);
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const arId = params.get("ar");
@@ -96,9 +104,15 @@ export default function Finance() {
     if (arId) {
       handleTabChange("AR");
       setInitialArId(arId);
+      if (modal !== "finance.receipt") {
+        replaceModal({ modal: "finance.receipt", values: { id: arId, ar: arId } });
+      }
     } else if (apId) {
       handleTabChange("AP");
       setInitialApId(apId);
+      if (modal !== "finance.payment") {
+        replaceModal({ modal: "finance.payment", values: { id: apId, ap: apId } });
+      }
     } else if (tabParam === "AP") {
       handleTabChange("AP");
     } else if (tabParam === "AR") {
@@ -108,7 +122,7 @@ export default function Finance() {
       setInitialArId(null);
       setInitialApId(null);
     }
-  }, [location.search]);
+  }, [handleTabChange, location.search, modal, replaceModal]);
 
   useEffect(() => {
     fetchSummary();
@@ -193,7 +207,13 @@ export default function Finance() {
     setError(null);
     setSuccess(null);
     setFormType(activeTab);
-    setFormOpen(true);
+    openModal({
+      modal: activeTab === "AR" ? "finance.receipt" : "finance.payment",
+      values: {
+        id,
+        [activeTab === "AR" ? "ar" : "ap"]: refNo || id,
+      },
+    });
   }
 
   function handleSuccess(msg: string) {
@@ -202,32 +222,18 @@ export default function Finance() {
     setSelectedAmount(0);
     setSelectedRef("");
     setRefreshTrigger(prev => prev + 1); // Trigger List Refresh
-    setFormOpen(false);
-
-    // Clear URL params on success too
-    navigate(location.pathname, { replace: true });
+    closeModal({ replace: true, clearKeys: ["modal", "id", "ar", "ap"] });
   }
 
   function handleError(msg: string) {
     setError(msg);
   }
 
-  // Handle Tab Change to reset selection
-  function handleTabChange(tab: "AR" | "AP") {
-    setActiveTab(tab);
-    setSelectedId("");
-    setSuccess(null);
-    setError(null);
-    setFormOpen(false);
-  }
-
   function handleCloseForm() {
-    setFormOpen(false);
     setSelectedId("");
     setSelectedAmount(0);
-
-    // Clear URL params to prevent re-opening if it was deep linked
-    navigate(location.pathname, { replace: true });
+    setSelectedRef("");
+    closeModal({ replace: true, clearKeys: ["modal", "id", "ar", "ap"] });
   }
 
   return (
@@ -403,11 +409,12 @@ export default function Finance() {
         </div>
       </div>
 
-      <Dialog isOpen={formOpen} onClose={handleCloseForm} contentClassName="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{formType === "AR" ? `Terima Pembayaran (AR) ${selectedRef ? `- ${selectedRef}` : ""}` : `Bayar Tagihan (AP) ${selectedRef ? `- ${selectedRef}` : ""}`}</DialogTitle>
-        </DialogHeader>
-        <DialogContent className="pt-4">
+      <TransactionOverlayShell
+        isOpen={modal === "finance.receipt" || modal === "finance.payment"}
+        onClose={handleCloseForm}
+        size="narrow"
+        title={formType === "AR" ? `Terima Pembayaran (AR) ${selectedRef ? `- ${selectedRef}` : ""}` : `Bayar Tagihan (AP) ${selectedRef ? `- ${selectedRef}` : ""}`}
+      >
           {formType === "AR" ? (
             <FinanceReceiptForm
               invoiceId={selectedId}
@@ -427,8 +434,7 @@ export default function Finance() {
               embedded
             />
           )}
-        </DialogContent>
-      </Dialog>
+      </TransactionOverlayShell>
     </div>
   );
 }

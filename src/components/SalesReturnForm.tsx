@@ -50,9 +50,22 @@ type ReturnItem = {
 type Props = {
     onSuccess: (msg: string) => void;
     onError: (msg: string) => void;
+    embedded?: boolean;
+    initialSalesId?: string;
+    onSaved?: (returnId: string) => void;
+    onCancel?: () => void;
+    redirectOnSave?: boolean;
 };
 
-export function SalesReturnForm({ onSuccess, onError }: Props) {
+export function SalesReturnForm({
+    onSuccess,
+    onError,
+    embedded = false,
+    initialSalesId,
+    onSaved,
+    onCancel,
+    redirectOnSave = true,
+}: Props) {
     const navigate = useNavigate()
     const { confirm } = useConfirm()
     const queryClient = useQueryClient()
@@ -182,10 +195,15 @@ export function SalesReturnForm({ onSuccess, onError }: Props) {
     }, [draftId, fetchDraft])
 
     useEffect(() => {
+        if (initialSalesId) {
+            setSelectedSaleId(initialSalesId)
+            ensureSaleInList(initialSalesId)
+            return
+        }
         if (!salesParamId || draftId) return
         setSelectedSaleId(salesParamId)
         ensureSaleInList(salesParamId)
-    }, [salesParamId, draftId, ensureSaleInList])
+    }, [initialSalesId, salesParamId, draftId, ensureSaleInList])
 
     useEffect(() => {
         if (!selectedSaleId || isEditing) return
@@ -331,7 +349,10 @@ export function SalesReturnForm({ onSuccess, onError }: Props) {
                 onSuccess(`Return Draft Updated: ${draftId}`)
                 queryClient.invalidateQueries({ queryKey: ["sales-return-detail", draftId] })
                 queryClient.invalidateQueries({ queryKey: ["sales-returns-history"] })
-                navigate(`/sales-returns/${draftId}`)
+                onSaved?.(draftId)
+                if (redirectOnSave) {
+                    navigate(`/sales-returns/${draftId}`)
+                }
             } else {
                 // 1. Header
                 const { data: retData, error: retError } = await supabase
@@ -367,7 +388,10 @@ export function SalesReturnForm({ onSuccess, onError }: Props) {
                 onSuccess(`Return Draft Created: ${retData.id}`)
                 queryClient.invalidateQueries({ queryKey: ["sales-return-detail", retData.id] })
                 queryClient.invalidateQueries({ queryKey: ["sales-returns-history"] })
-                navigate(`/sales-returns/${retData.id}`)
+                onSaved?.(retData.id)
+                if (redirectOnSave) {
+                    navigate(`/sales-returns/${retData.id}`)
+                }
             }
 
             setLines([])
@@ -388,37 +412,55 @@ export function SalesReturnForm({ onSuccess, onError }: Props) {
 
     return (
         <div className="space-y-6">
-            <PageHeader
-                title="Sales Return"
-                description="Process customer returns, adjust inventory, and issue refunds or credits."
-                actions={
-                    <Button onClick={() => navigate('/sales-returns/history')} variant="outline" icon={<Icons.FileText className="w-4 h-4" />}>
-                        Return History
-                    </Button>
-                }
-            />
+            {!embedded && (
+                <PageHeader
+                    title="Sales Return"
+                    description="Process customer returns, adjust inventory, and issue refunds or credits."
+                    actions={
+                        <Button onClick={() => navigate('/sales-returns/history')} variant="outline" icon={<Icons.FileText className="w-4 h-4" />}>
+                            Return History
+                        </Button>
+                    }
+                />
+            )}
+            {embedded && selectedSaleId && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                    {postedSales.find((sale) => sale.id === selectedSaleId)
+                        ? `${postedSales.find((sale) => sale.id === selectedSaleId)?.sales_no || selectedSaleId.substring(0, 8)} • ${postedSales.find((sale) => sale.id === selectedSaleId)?.customer.name}`
+                        : 'Loading source sales...'}
+                </div>
+            )}
             <Card className="shadow-md border-gray-200">
                 <CardHeader className="bg-blue-50/50 pb-4 border-b border-blue-100">
                     <CardTitle className="text-blue-900 flex items-center gap-2">
-                        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold ring-1 ring-blue-200">1</span>
+                        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold ring-1 ring-blue-200">{embedded ? '1' : '1'}</span>
                         Select Original Sales
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-6">
-                    <Select
-                        label="Sales Invoice Source"
-                        value={selectedSaleId}
-                        onChange={e => setSelectedSaleId(e.target.value)}
-                        disabled={isEditing}
-                        className="font-mono text-sm"
-                        options={[
-                            { label: "-- Select Invoice --", value: "" },
-                            ...postedSales.map(s => ({
-                                label: `${s.sales_date} • ${s.sales_no || 'No Ref'} • ${s.customer.name} • ${formatCurrency(s.total_amount)}`,
-                                value: s.id
-                            }))
-                        ]}
-                    />
+                    {embedded ? (
+                        <div className="text-sm text-slate-700">
+                            <span className="font-medium">Source Sales:</span>{' '}
+                            {postedSales.find((sale) => sale.id === selectedSaleId)
+                                ? `${postedSales.find((sale) => sale.id === selectedSaleId)?.sales_no || selectedSaleId.substring(0, 8)} • ${postedSales.find((sale) => sale.id === selectedSaleId)?.customer.name}`
+                                : 'Loading...'}
+                        </div>
+                    ) : (
+                        <Select
+                            label="Sales Invoice Source"
+                            value={selectedSaleId}
+                            onChange={e => setSelectedSaleId(e.target.value)}
+                            disabled={isEditing}
+                            className="font-mono text-sm"
+                            options={[
+                                { label: "-- Select Invoice --", value: "" },
+                                ...postedSales.map(s => ({
+                                    label: `${s.sales_date} • ${s.sales_no || 'No Ref'} • ${s.customer.name} • ${formatCurrency(s.total_amount)}`,
+                                    value: s.id
+                                }))
+                            ]}
+                        />
+                    )}
                 </CardContent>
             </Card>
 
@@ -614,7 +656,17 @@ export function SalesReturnForm({ onSuccess, onError }: Props) {
                                     </div>
                                 </div>
 
-                                <div className="flex justify-end pt-4">
+                                <div className="flex justify-end gap-3 pt-4">
+                                    {embedded && (
+                                        <Button
+                                            onClick={onCancel}
+                                            variant="outline"
+                                            disabled={loading}
+                                            className="w-full sm:w-auto"
+                                        >
+                                            Cancel
+                                        </Button>
+                                    )}
                                     <Button
                                         onClick={handleSaveDraft}
                                         disabled={loading || lines.length === 0}

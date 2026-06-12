@@ -28,6 +28,12 @@ import { Pagination } from "./ui/Pagination";
 import { PageHeader } from "./ui/PageHeader";
 import { Section } from "./ui/Section";
 import { useSalesHistoryQuery, useSalesReturnDraftCountQuery, prefetchSalesDetail, useQueryClient } from "../hooks/useQueries";
+import { useRouteModal } from "../hooks/useRouteModal";
+import { TransactionOverlayShell } from "./ui/TransactionOverlayShell";
+import { SalesEntryForm } from "./SalesEntryForm";
+import SalesDetail from "./SalesDetail";
+import { SalesReturnForm } from "./SalesReturnForm";
+import SalesReturnDetail from "./SalesReturnDetail";
 
 type SalesRecord = {
   id: string;
@@ -151,6 +157,7 @@ export default function SalesHistory() {
   const [dateTo, setDateTo] = useState("");
   const navigate = useNavigate();
   const { confirm } = useConfirm();
+  const { modal, id, parentId, openModal, replaceModal, closeModal } = useRouteModal();
 
   const { page, setPage, pageSize } = usePagination();
 
@@ -219,7 +226,7 @@ export default function SalesHistory() {
       }
 
       setSuccess("Sales posted successfully!");
-      navigate(`/sales/${saleId}`);
+      replaceModal({ modal: "sales.detail", values: { id: saleId } });
     } catch (err: unknown) {
       setSuccess(null);
       if (err instanceof Error) {
@@ -232,10 +239,10 @@ export default function SalesHistory() {
     } finally {
       setPostingId(null);
     }
-  }, [confirm, navigate]);
+  }, [confirm, replaceModal]);
 
-  const handleOpen = useCallback((id: string) => navigate(`/sales/${id}`), [navigate]);
-  const handleEdit = useCallback((id: string) => navigate(`/sales/${id}/edit`), [navigate]);
+  const handleOpen = useCallback((targetId: string) => openModal({ modal: "sales.detail", values: { id: targetId } }), [openModal]);
+  const handleEdit = useCallback((targetId: string) => openModal({ modal: "sales.edit", values: { id: targetId } }), [openModal]);
 
   const queryClient = useQueryClient();
   const handlePrefetch = useCallback((id: string) => {
@@ -244,6 +251,26 @@ export default function SalesHistory() {
 
   const loading = isLoading || isFetching;
   const fetchErrorMessage = fetchError instanceof Error ? fetchError.message : fetchError ? "Failed to fetch sales" : null;
+  const handleOverlayClose = useCallback(() => {
+    closeModal({ clearKeys: ["modal", "id", "parentId", "sales", "draft"] });
+  }, [closeModal]);
+
+  const overlayTitle = (() => {
+    switch (modal) {
+      case 'sales.create':
+        return 'New Sales'
+      case 'sales.edit':
+        return 'Edit Sales'
+      case 'sales.detail':
+        return 'Sales Detail'
+      case 'salesReturn.create':
+        return 'Create Sales Return'
+      case 'salesReturn.detail':
+        return 'Sales Return Detail'
+      default:
+        return ''
+    }
+  })();
 
   if (loading) {
     return (
@@ -286,7 +313,7 @@ export default function SalesHistory() {
               )}
             </Button>
             <Button
-              onClick={() => navigate("/sales")}
+              onClick={() => openModal({ modal: "sales.create" })}
               icon={<Icons.Plus className="w-4 h-4" />}
             >
               New Sales
@@ -436,6 +463,59 @@ export default function SalesHistory() {
           )}
         </CardContent>
       </Card>
+
+      <TransactionOverlayShell
+        isOpen={Boolean(modal && overlayTitle)}
+        title={overlayTitle}
+        onClose={handleOverlayClose}
+        size={modal === 'sales.create' || modal === 'sales.edit' || modal === 'salesReturn.create' ? 'xwide' : 'wide'}
+      >
+        {modal === 'sales.create' && (
+          <SalesEntryForm
+            onSuccess={setSuccess}
+            onError={setError}
+            redirectOnSave={false}
+            onSaved={(savedId) => replaceModal({ modal: 'sales.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'sales.edit' && id && (
+          <SalesEntryForm
+            initialSalesId={id}
+            onSuccess={setSuccess}
+            onError={setError}
+            redirectOnSave={false}
+            onSaved={(savedId) => replaceModal({ modal: 'sales.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'sales.detail' && id && (
+          <SalesDetail
+            salesId={id}
+            embedded
+            onClose={handleOverlayClose}
+            onOpenEdit={(targetId) => replaceModal({ modal: 'sales.edit', values: { id: targetId } })}
+            onOpenCreateReturn={(salesId) => replaceModal({ modal: 'salesReturn.create', values: { parentId: salesId, sales: salesId } })}
+            onOpenReturnDetail={(returnId) => replaceModal({ modal: 'salesReturn.detail', values: { id: returnId } })}
+          />
+        )}
+        {modal === 'salesReturn.create' && (
+          <SalesReturnForm
+            onSuccess={setSuccess}
+            onError={setError}
+            embedded
+            initialSalesId={parentId || undefined}
+            redirectOnSave={false}
+            onCancel={handleOverlayClose}
+            onSaved={(savedId) => replaceModal({ modal: 'salesReturn.detail', values: { id: savedId } })}
+          />
+        )}
+        {modal === 'salesReturn.detail' && id && (
+          <SalesReturnDetail
+            returnId={id}
+            embedded
+            onClose={handleOverlayClose}
+          />
+        )}
+      </TransactionOverlayShell>
     </div>
   );
 }

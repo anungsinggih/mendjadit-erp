@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { Button } from "./ui/Button";
@@ -50,8 +50,15 @@ const STATUS_COLORS: Record<string, string> = {
   POSTED: "bg-green-100 text-green-700",
 };
 
-export default function MakloonIssueDetail() {
-  const { id } = useParams();
+type MakloonIssueDetailProps = {
+  issueId?: string;
+  embedded?: boolean;
+  onClose?: () => void;
+};
+
+export default function MakloonIssueDetail({ issueId, embedded = false, onClose }: MakloonIssueDetailProps = {}) {
+  const { id: routeId } = useParams();
+  const id = issueId || routeId;
   const navigate = useNavigate();
   const { confirm } = useConfirm();
 
@@ -60,53 +67,71 @@ export default function MakloonIssueDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const showError = useCallback(
+    async (message: string) => {
+      await confirm({ title: "Error", description: message, confirmText: "OK", hideCancel: true });
+    },
+    [confirm],
+  );
+
+  const fetchIssue = useCallback(async () => {
     if (!id) return;
-    const fetch = async () => {
-      const [iRes, itemsRes] = await Promise.all([
-        supabase
-          .from("makloon_material_issues")
-          .select("*, makloon_orders(order_no), vendors(name)")
-          .eq("id", id)
-          .single(),
-        supabase
-          .from("makloon_issue_items")
-          .select("id, item_id, uom_snapshot, qty")
-          .eq("issue_id", id),
-      ]);
-      if (iRes.error) {
-        setError("Issue tidak ditemukan");
-        setLoading(false);
-        return;
-      }
-      const issueItems = (itemsRes.data as IssueItemRow[]) || [];
-      const itemIds = [...new Set(issueItems.map((item) => item.item_id))];
-      const itemNameMap = new Map<string, string>();
 
-      if (itemIds.length > 0) {
-        const { data: itemRows } = await supabase
-          .from("items")
-          .select("id, name")
-          .in("id", itemIds);
+    setLoading(true);
+    setError(null);
 
-        ((itemRows as ItemNameRow[]) || []).forEach((item) => {
-          itemNameMap.set(item.id, item.name);
-        });
-      }
+    const [iRes, itemsRes] = await Promise.all([
+      supabase
+        .from("makloon_material_issues")
+        .select("*, makloon_orders(order_no), vendors(name)")
+        .eq("id", id)
+        .single(),
+      supabase
+        .from("makloon_issue_items")
+        .select("id, item_id, uom_snapshot, qty")
+        .eq("issue_id", id),
+    ]);
 
-      setIssue(iRes.data as unknown as Issue);
-      setItems(
-        issueItems.map((item) => ({
-          id: item.id,
-          item_name: itemNameMap.get(item.item_id) || "-",
-          uom_snapshot: item.uom_snapshot,
-          qty: item.qty,
-        })),
-      );
+    if (iRes.error) {
+      setError("Issue tidak ditemukan");
       setLoading(false);
-    };
-    fetch();
+      return;
+    }
+
+    const issueItems = (itemsRes.data as IssueItemRow[]) || [];
+    const itemIds = [...new Set(issueItems.map((item) => item.item_id))];
+    const itemNameMap = new Map<string, string>();
+
+    if (itemIds.length > 0) {
+      const { data: itemRows } = await supabase
+        .from("items")
+        .select("id, name")
+        .in("id", itemIds);
+
+      ((itemRows as ItemNameRow[]) || []).forEach((item) => {
+        itemNameMap.set(item.id, item.name);
+      });
+    }
+
+    setIssue(iRes.data as unknown as Issue);
+    setItems(
+      issueItems.map((item) => ({
+        id: item.id,
+        item_name: itemNameMap.get(item.item_id) || "-",
+        uom_snapshot: item.uom_snapshot,
+        qty: item.qty,
+      })),
+    );
+    setLoading(false);
   }, [id]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchIssue();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [fetchIssue]);
 
   const handleDelete = async () => {
     const confirmed = await confirm({
@@ -118,9 +143,10 @@ export default function MakloonIssueDetail() {
     if (confirmed) {
       const { error } = await supabase.from("makloon_material_issues").delete().eq("id", id);
       if (error) {
-        alert(error.message);
+        await showError(error.message);
       } else {
-        navigate(`/makloon/${issue?.makloon_order_id}`);
+        if (embedded) onClose?.();
+        else navigate(`/makloon/${issue?.makloon_order_id}`);
       }
     }
   };
@@ -135,9 +161,9 @@ export default function MakloonIssueDetail() {
     if (confirmed) {
       const { error } = await supabase.rpc("rpc_post_makloon_material_issue", { p_issue_id: id });
       if (error) {
-        alert(error.message);
+        await showError(error.message);
       } else {
-        window.location.reload();
+        await fetchIssue();
       }
     }
   };
@@ -148,15 +174,34 @@ export default function MakloonIssueDetail() {
 
   return (
     <div className="w-full space-y-6 pb-20">
-      <PageHeader
-        title={`Material Issue ${issue.issue_no || issue.id.substring(0, 8)}`}
-        breadcrumbs={[
-          { label: "Makloon", href: "/makloon" },
-          { label: `Order ${issue.makloon_orders?.order_no || "Detail"}`, href: `/makloon/${issue.makloon_order_id}` },
-          { label: "Issue" }
-        ]}
-        actions={
-          <div className="flex gap-2">
+      {!embedded ? (
+        <PageHeader
+          title={`Material Issue ${issue.issue_no || issue.id.substring(0, 8)}`}
+          breadcrumbs={[
+            { label: "Makloon", href: "/makloon" },
+            { label: `Order ${issue.makloon_orders?.order_no || "Detail"}`, href: `/makloon/${issue.makloon_order_id}` },
+            { label: "Issue" }
+          ]}
+          actions={
+            <div className="flex gap-2">
+              {issue.status === "DRAFT" && (
+                <>
+                  <Button variant="outline" className="text-red-600 hover:bg-red-50" onClick={handleDelete} icon={<Icons.Trash className="w-4 h-4" />}>
+                    Hapus
+                  </Button>
+                  <Button onClick={handlePost} icon={<Icons.Check className="w-4 h-4" />}>
+                    Post Issue
+                  </Button>
+                </>
+              )}
+              <Button variant="outline" onClick={() => navigate(`/makloon/${issue.makloon_order_id}`)} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
+                Kembali
+              </Button>
+            </div>
+          }
+        />
+      ) : (
+        <div className="flex justify-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
             {issue.status === "DRAFT" && (
               <>
                 <Button variant="outline" className="text-red-600 hover:bg-red-50" onClick={handleDelete} icon={<Icons.Trash className="w-4 h-4" />}>
@@ -167,12 +212,11 @@ export default function MakloonIssueDetail() {
                 </Button>
               </>
             )}
-            <Button variant="outline" onClick={() => navigate(`/makloon/${issue.makloon_order_id}`)} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
-              Kembali
+            <Button variant="outline" onClick={() => onClose?.()} icon={<Icons.ArrowLeft className="w-4 h-4" />}>
+              Close
             </Button>
           </div>
-        }
-      />
+      )}
 
       <Card>
         <CardHeader>

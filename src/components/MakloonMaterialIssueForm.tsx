@@ -165,13 +165,13 @@ export default function MakloonMaterialIssueForm({ orderId: propOrderId, embedde
     if (!orderId || items.length === 0) { setError("Tambahkan minimal 1 item"); return; }
     setSaving(true);
     const payload = {
-      makloon_order_id: orderId,
-      issue_date: issueDate,
-      notes,
-      lines: items,
-      post,
+      p_makloon_order_id: orderId,
+      p_issue_date: issueDate,
+      p_notes: notes || null,
+      p_lines: items,
+      p_post: post,
     };
-    const { error: rpcError } = await supabase.rpc("create_makloon_issue", payload);
+    const { error: rpcError } = await supabase.rpc("rpc_create_makloon_issue", payload);
     setSaving(false);
     if (rpcError) { setError(rpcError.message); return; }
     if (embedded) {

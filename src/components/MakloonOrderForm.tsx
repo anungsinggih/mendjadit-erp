@@ -34,9 +34,21 @@ type MakloonOrderItemRow = {
   subtotal_jasa: number;
 };
 
-export default function MakloonOrderForm() {
+type SaveMakloonOrderDraftResult = {
+  order_id?: string;
+};
+
+type MakloonOrderFormProps = {
+  orderId?: string;
+  embedded?: boolean;
+  onSaved?: (orderId: string) => void;
+  onCancel?: () => void;
+};
+
+export default function MakloonOrderForm({ orderId: propOrderId, embedded = false, onSaved, onCancel }: MakloonOrderFormProps = {}) {
   const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
+  const { id: routeId } = useParams<{ id: string }>();
+  const id = propOrderId || routeId;
   const { confirm } = useConfirm();
   const queryClient = useQueryClient();
 
@@ -66,7 +78,6 @@ export default function MakloonOrderForm() {
 
   // Add this function to fetch default cost for selected vendor and item
   const fetchDefaultCost = async (vendorId: string, itemId: string) => {
-    console.log("Fetching cost for:", { vendorId, itemId });
     if (!vendorId || !itemId) return null;
 
     const { data: preferredData, error: prefErr } = await supabase
@@ -77,8 +88,11 @@ export default function MakloonOrderForm() {
       .eq('is_active', true)
       .eq('is_preferred', true)
       .maybeSingle();
-      
-    console.log("Preferred data result:", { data: preferredData, error: prefErr });
+
+    if (prefErr) {
+      setCostNotFound(true);
+      return null;
+    }
 
     if (preferredData?.unit_cost !== undefined && preferredData?.unit_cost !== null) {
       setCostNotFound(false);
@@ -92,8 +106,11 @@ export default function MakloonOrderForm() {
       .eq('item_id', itemId)
       .eq('is_active', true)
       .maybeSingle();
-      
-    console.log("Fallback data result:", { data: fallbackData, error: fallErr });
+
+    if (fallErr) {
+      setCostNotFound(true);
+      return null;
+    }
 
     if (fallbackData?.unit_cost !== undefined && fallbackData?.unit_cost !== null) {
       setCostNotFound(false);
@@ -248,81 +265,49 @@ export default function MakloonOrderForm() {
 
     setLoading(true);
     try {
-      const payload = {
-        vendor_id: vendorId,
-        order_date: orderDate,
-        expected_completion_date: expectedDate || null,
-        notes: notes || null,
-        total_jasa: totalJasa,
-        status: "DRAFT",
-      };
-
-      const orderId = id;
-
-      if (isEditMode && orderId) {
-        const { error: orderError } = await supabase
-          .from("makloon_orders")
-          .update(payload)
-          .eq("id", orderId)
-          .eq("status", "DRAFT");
-        if (orderError) throw orderError;
-
-        const { error: deleteError } = await supabase
-          .from("makloon_order_items")
-          .delete()
-          .eq("makloon_order_id", orderId);
-        if (deleteError) throw deleteError;
-
-        const itemData = lines.map(l => ({
-          makloon_order_id: orderId,
+      const itemData = lines.map((l) => ({
           item_id: l.item_id,
           uom_snapshot: l.uom,
           qty_ordered: l.qty_ordered,
           jasa_per_unit: l.jasa_per_unit,
-          subtotal_jasa: l.subtotal_jasa,
+          item_name: l.item_name,
         }));
-        const { error: itemError } = await supabase.from("makloon_order_items").insert(itemData);
-        if (itemError) throw itemError;
 
-        queryClient.invalidateQueries({ queryKey: ["makloon-orders"] });
-        navigate(`/makloon/${orderId}`, { replace: true });
-        return;
-      }
+      const { data, error } = await supabase.rpc("rpc_save_makloon_order_draft", {
+        p_order_id: id ?? null,
+        p_vendor_id: vendorId,
+        p_order_date: orderDate,
+        p_expected_completion_date: expectedDate || null,
+        p_notes: notes || null,
+        p_items: itemData,
+      });
+      if (error) throw error;
 
-      const { data: orderData, error: orderError } = await supabase
-        .from("makloon_orders")
-        .insert([payload])
-        .select()
-        .single();
-      if (orderError) throw orderError;
-
-      const itemData = lines.map(l => ({
-        makloon_order_id: orderData.id,
-        item_id: l.item_id,
-        uom_snapshot: l.uom,
-        qty_ordered: l.qty_ordered,
-        jasa_per_unit: l.jasa_per_unit,
-        subtotal_jasa: l.subtotal_jasa,
-      }));
-      const { error: itemError } = await supabase.from("makloon_order_items").insert(itemData);
-      if (itemError) throw itemError;
+      const orderId = (data as SaveMakloonOrderDraftResult | null)?.order_id ?? id;
+      if (!orderId) throw new Error("Gagal menyimpan order makloon.");
 
       queryClient.invalidateQueries({ queryKey: ["makloon-orders"] });
-      navigate(`/makloon/${orderData.id}`, { replace: true });
+      onSaved?.(orderId);
+      if (embedded) {
+        return;
+      }
+      navigate(`/makloon/${orderId}`, { replace: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       await confirm({ title: "Error", description: msg, confirmText: "OK", hideCancel: true });
     } finally {
       setLoading(false);
     }
-  }, [vendorId, orderDate, expectedDate, notes, lines, totalJasa, id, isEditMode, confirm, navigate, queryClient]);
+  }, [vendorId, orderDate, expectedDate, notes, lines, id, embedded, onSaved, confirm, navigate, queryClient]);
 
   return (
     <div className="w-full space-y-6 pb-20">
-      <PageHeader
-        title={isEditMode ? "Edit Draft Order Makloon" : "Buat Order Makloon Baru"}
-        breadcrumbs={[{ label: "Makloon", href: "/makloon" }, { label: isEditMode ? "Edit Order" : "New Order" }]}
-      />
+      {!embedded && (
+        <PageHeader
+          title={isEditMode ? "Edit Draft Order Makloon" : "Buat Order Makloon Baru"}
+          breadcrumbs={[{ label: "Makloon", href: "/makloon" }, { label: isEditMode ? "Edit Order" : "New Order" }]}
+        />
+      )}
       <Card className="shadow-md">
         <CardHeader className="border-b bg-slate-50/50">
           <CardTitle>Work Order Makloon</CardTitle>
@@ -467,7 +452,7 @@ export default function MakloonOrderForm() {
         </div>
         </CardContent>
         <CardFooter className="border-t bg-gray-50 p-4 gap-3">
-          <Button variant="outline" onClick={() => navigate("/makloon")} icon={<Icons.ArrowLeft className="w-4 h-4" />}>Batal</Button>
+          <Button variant="outline" onClick={() => embedded ? onCancel?.() : navigate("/makloon")} icon={<Icons.ArrowLeft className="w-4 h-4" />}>Batal</Button>
           <Button onClick={handleSave} isLoading={loading} disabled={loading} icon={<Icons.Save className="w-4 h-4" />}>{isEditMode ? "Update Draft Order" : "Simpan Draft Order"}</Button>
         </CardFooter>
       </Card>
