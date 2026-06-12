@@ -19,6 +19,7 @@ values
   ('4100', 'Penjualan', true),
   ('4110', 'Retur Penjualan', true), -- Added for returns
   ('5100', 'Harga Pokok Penjualan', true),
+  ('5200', 'Diskon Pembelian', true),
   ('6100', 'Beban Operasional', true) -- Adjustment Expense
 on conflict (code) do update
 set name = excluded.name,
@@ -69,8 +70,9 @@ where not exists (select 1 from public.company_profile);
 INSERT INTO uoms (code, name, is_active) VALUES
 ('PCS', 'PCS', true),
 ('SET', 'SET', true),
-('M', 'METER', true),
-('PACK', 'PACK', true)
+('METER', 'METER', true),
+('PACK', 'PACK', true),
+('YARD', 'YARD', true)
 ON CONFLICT (code) DO NOTHING;
 
 -- Seed Colors
@@ -79,16 +81,18 @@ INSERT INTO colors (code, name, is_active) VALUES
 ('HIJAU', 'Hijau', true),
 ('BIRU', 'Biru', true),
 ('COKLAT', 'Cokelat', true),
-('HITAM', 'Hitam', true)
+('HITAM', 'Hitam', true),
+('N/A', 'N/A', true)
 ON CONFLICT (code) DO NOTHING;
 
 -- Seed Sizes
 INSERT INTO sizes (code, name, is_active) VALUES
+('N/A', 'N/A', true),
 ('S', 'S', true),
-('SM', 'SM', true),
 ('M', 'M', true),
 ('L', 'L', true),
 ('XL', 'XL', true),
 ('2XL', 'XXL', true),
 ('3XL', 'XXXL', true)
 ON CONFLICT (code) DO NOTHING;
+

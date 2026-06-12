@@ -9,6 +9,7 @@ type PurchaseInvoicePrintProps = {
         terms: string
         total_amount: number
         discount_amount?: number | null
+        dp_amount?: number | null
         notes?: string | null
         payment_method_code?: string | null
     }
@@ -40,6 +41,8 @@ export const PurchaseInvoicePrint: FunctionComponent<PurchaseInvoicePrintProps> 
 
     const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0)
     const diskon = data.discount_amount || 0
+    const dpAmount = data.dp_amount || 0
+    const finalTotal = Math.max(0, data.total_amount - dpAmount)
     const halfPageRows = 6
     const fullPageRows = 20
     const isImageMode = mode === "image"
@@ -235,15 +238,21 @@ export const PurchaseInvoicePrint: FunctionComponent<PurchaseInvoicePrintProps> 
                                         <span>Diskon</span>
                                         <span className="font-mono">({formatCurrency(diskon).replace('Rp', '')})</span>
                                     </div>
+                                    {dpAmount > 0 && (
+                                        <div className="flex justify-between items-center mb-1 text-[9px] text-indigo-600">
+                                            <span>DP</span>
+                                            <span className="font-mono">({formatCurrency(dpAmount).replace('Rp', '')})</span>
+                                        </div>
+                                    )}
                                     {/* Separator */}
                                     <div className="border-b border-gray-200 my-1.5"></div>
 
                                     {/* Grand Total */}
                                     <div className="flex justify-between items-end">
-                                        <div className="text-[8px] font-bold text-indigo-600 uppercase tracking-wider mb-0.5">Total Tagihan</div>
+                                        <div className="text-[8px] font-bold text-indigo-600 uppercase tracking-wider mb-0.5">Total Akhir</div>
                                         <div className="text-xl font-black text-gray-900 font-mono tracking-tighter leading-none">
                                             <span className="text-sm text-gray-400 font-light mr-1">Rp</span>
-                                            {new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0 }).format(data.total_amount)}
+                                            {new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0 }).format(finalTotal)}
                                         </div>
                                     </div>
                                 </div>

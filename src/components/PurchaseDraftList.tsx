@@ -10,10 +10,14 @@ import { useConfirm } from "./ui/ConfirmDialogContext";
 import { usePagination } from "../hooks/usePagination";
 import { Pagination } from "./ui/Pagination";
 
+import { formatCurrency } from "../lib/format";
+
 type PurchaseDraft = {
     id: string;
     purchase_date?: string;
+    purchase_no?: string | null;
     terms?: string;
+    total_amount?: number;
     vendor?: { name?: string };
 };
 
@@ -52,30 +56,72 @@ export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props)
         [drafts, range]
     );
 
-    async function handlePost(purId: string) {
-        const ok = await confirm({
-            title: "Post Purchase Draft",
-            description: "Confirm POST? This is irreversible.",
-            confirmText: "POST",
-            cancelText: "Cancel",
-            tone: "danger",
-        });
-        if (!ok) return;
-        setPostingId(purId);
+    async function handlePost(draft: PurchaseDraft) {
+        setPostingId(draft.id);
+
+        let dpTotal = 0;
         try {
-            const { data, error } = await supabase.rpc("rpc_post_purchase", {
-                p_purchase_id: purId,
+            const { data: dpData } = await supabase
+                .from('journals')
+                .select('id')
+                .eq('ref_type', 'PURCHASE_DP')
+                .eq('ref_id', draft.id);
+            if (dpData && dpData.length > 0) {
+                const { data: lines } = await supabase
+                    .from('journal_lines')
+                    .select('debit')
+                    .in('journal_id', dpData.map(d => d.id))
+                    .gt('debit', 0);
+                dpTotal = (lines || []).reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
+            }
+        } catch {
+            // non-fatal
+        }
+
+        const total = draft.total_amount || 0;
+        const summaryContent = (
+            <div className="space-y-3 text-sm pt-2 text-left">
+                <div className="p-3 bg-slate-50 rounded border border-slate-100 space-y-1">
+                    <div className="flex justify-between">
+                        <span className="text-gray-500">Total Purchase:</span>
+                        <span className="font-semibold">{formatCurrency(total)}</span>
+                    </div>
+                    {dpTotal > 0 && (
+                        <div className="flex justify-between text-indigo-600 font-medium">
+                            <span>DP Terbayar:</span>
+                            <span>-{formatCurrency(dpTotal)}</span>
+                        </div>
+                    )}
+                    <div className="flex justify-between border-t pt-1 mt-1 font-bold text-slate-900">
+                        <span>Sisa {draft.terms === 'CASH' ? 'Bayar' : 'Hutang'}:</span>
+                        <span>{formatCurrency(Math.max(0, total - dpTotal))}</span>
+                    </div>
+                </div>
+                <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-100 italic">
+                    Stok akan bertambah dan jurnal akan terbentuk. Tindakan ini tidak bisa dibatalkan.
+                </div>
+            </div>
+        );
+
+        const ok = await confirm({
+            title: "Konfirmasi Post Purchase",
+            description: summaryContent,
+            confirmText: "POST SEKARANG",
+            cancelText: "Batal",
+            tone: "default",
+        });
+        if (!ok) {
+            setPostingId(null);
+            return;
+        }
+
+        try {
+            const { error } = await supabase.rpc("rpc_post_purchase", {
+                p_purchase_id: draft.id,
             });
             if (error) throw error;
-            const journalSkipped =
-                (data as { journal_skipped?: boolean } | null | undefined)?.journal_skipped ??
-                (Array.isArray(data) ? (data[0] as { journal_skipped?: boolean } | undefined)?.journal_skipped : undefined);
-            onSuccess(
-                journalSkipped
-                    ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
-                    : "Purchase POSTED!"
-            );
-            navigate(`/purchases/${purId}`);
+            onSuccess("Purchase POSTED!");
+            navigate(`/purchases/${draft.id}`);
         } catch (err: unknown) {
             onError(getErrorMessage(err));
         } finally {
@@ -121,7 +167,7 @@ export function PurchaseDraftList({ refreshTrigger, onSuccess, onError }: Props)
                                             <div className="flex flex-col sm:flex-row gap-3 mt-6">
                                                 <Button
                                                     type="button"
-                                                    onClick={() => handlePost(d.id)}
+                                                    onClick={() => handlePost(d)}
                                                     disabled={isPosting}
                                                     className="w-full sm:w-auto min-h-[44px] bg-blue-600 hover:bg-blue-700"
                                                     icon={<Icons.Check className="w-4 h-4" />}

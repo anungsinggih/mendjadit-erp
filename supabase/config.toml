@@ -6,7 +6,7 @@ project_id = "new-mvp-Mendjahit"
 
 [api]
 # Port to use for the API URL.
-port = 54321
+port = 56321
 # Schemas exposed through the REST and GraphQL API.
 schemas = ["public", "storage", "graphql_public"]
 # Extra schemas that should stay in the search_path of every request.
@@ -16,9 +16,9 @@ max_rows = 1000
 
 [db]
 # Port used by the local Postgres instance.
-port = 54322
+port = 56322
 # Port used by `db diff` to initialize the shadow database.
-shadow_port = 54320
+shadow_port = 56320
 # This should match your remote Postgres major version.
 major_version = 17
 

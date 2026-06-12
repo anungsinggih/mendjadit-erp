@@ -200,5 +200,11 @@ export const Icons = {
     ),
     LogOut: (props: IconProps) => (
         <IconWrapper {...props}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></IconWrapper>
+    ),
+    Scissors: (props: IconProps) => (
+        <IconWrapper {...props}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" /></IconWrapper>
+    ),
+    Factory: (props: IconProps) => (
+        <IconWrapper {...props}><path d="M4 22V10a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v12" /><path d="M12 14V7a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v7" /><path d="M2 22h20" /></IconWrapper>
     )
 };

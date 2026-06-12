@@ -14,7 +14,6 @@ import { TotalFooter } from "./ui/TotalFooter";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/Dialog";
 import VendorForm from "./VendorForm";
 import { Combobox } from "./ui/Combobox";
-import { Badge } from "./ui/Badge";
 
 type Vendor = {
     id: string;
@@ -27,10 +26,6 @@ type Vendor = {
 
 import { ITEM_TYPES } from "../lib/constants";
 import type { Item } from "../types/shared";
-
-// Local extensions if needed, or just rely on shared type
-// For PurchaseEntryForm we might need specific fields, let's check.
-// The shared type has what we need.
 
 type PurchaseLine = {
     item_id: string;
@@ -82,8 +77,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
     const [qty, setQty] = useState(1);
     const [itemFilter, setItemFilter] = useState<"ALL" | keyof typeof ITEM_TYPES>("ALL");
 
-    // Refs for Accessibility
-    // const itemSelectRef = useRef<HTMLButtonElement>(null); // Replaced by Combobox
     const costInputRef = useRef<HTMLInputElement>(null);
 
     const getErrorMessage = (error: unknown) => {
@@ -138,10 +131,13 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
 
     const fetchMasterData = useCallback(async () => {
         try {
+            // Purchase engine is for SUPPLIER vendors only.
+            // Vendor Konveksi / Internal will be handled by the Makloon module (separate feature).
             const { data: venData, error: venError } = await supabase
                 .from("vendors")
                 .select("id, name, phone, address, is_active, vendor_type")
-                .eq("is_active", true);
+                .eq("is_active", true)
+                .eq("vendor_type", "SUPPLIER");
             if (venError) throw venError;
             const { data: itemData, error: itemError } = await supabase
                 .from("items")
@@ -158,7 +154,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
 
             setVendors((venData as unknown as Vendor[]) || []);
 
-
             const mappedItems = (itemData || []).map((item) => ({
                 ...item,
                 size_name: (item.sizes as unknown as { name: string } | null)?.name,
@@ -168,7 +163,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
             setItems((mappedItems as unknown as Item[]) || []);
             setPaymentMethods(methodData || []);
         } catch (err: unknown) {
-            onError(getErrorMessage(err)); // Fixed argument count
+            onError(getErrorMessage(err));
         }
     }, [onError]);
 
@@ -294,44 +289,21 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         return Math.max(0, parsed);
     };
 
-    const selectedVendor = vendors.find((v) => v.id === vendorId);
-    const vendorType = selectedVendor?.vendor_type || 'SUPPLIER';
-    const isProductionVendor = vendorType === 'KONVEKSI' || vendorType === 'INTERNAL';
-    const vendorTypeLabel = vendorType === 'KONVEKSI' ? 'Konveksi' : vendorType === 'INTERNAL' ? 'Internal' : 'Supplier';
-    const allowedItemTypes: Array<"ALL" | keyof typeof ITEM_TYPES> = isProductionVendor
-        ? [ITEM_TYPES.FINISHED_GOOD]
-        : ["ALL", ITEM_TYPES.RAW_MATERIAL, ITEM_TYPES.TRADED, ITEM_TYPES.FINISHED_GOOD];
-
-    useEffect(() => {
-        if (!vendorId) return;
-        if (isProductionVendor) {
-            if (itemFilter !== ITEM_TYPES.FINISHED_GOOD) {
-                setItemFilter(ITEM_TYPES.FINISHED_GOOD);
-            }
-            if (selectedItemId) {
-                const item = items.find((i) => i.id === selectedItemId);
-                if (item && item.type !== ITEM_TYPES.FINISHED_GOOD) {
-                    setSelectedItemId("");
-                    setCostPrice(null);
-                }
-            }
-        }
-    }, [vendorId, isProductionVendor, itemFilter, selectedItemId, items]);
+    // Purchase engine supports all item types from SUPPLIER:
+    // RAW_MATERIAL, TRADED, FINISHED_GOOD.
+    // Cost is required (>0) for all line items regardless of type.
+    const allowedItemTypes: Array<"ALL" | keyof typeof ITEM_TYPES> = [
+        "ALL",
+        ITEM_TYPES.RAW_MATERIAL,
+        ITEM_TYPES.TRADED,
+        ITEM_TYPES.FINISHED_GOOD,
+    ];
 
     function addItem() {
         if (!selectedItemId) return;
         const item = items.find((i) => i.id === selectedItemId);
         if (!item) return;
-        if (isProductionVendor && item.type !== ITEM_TYPES.FINISHED_GOOD) {
-            void confirm({
-                title: "Invalid Item Type",
-                description: "Vendor Konveksi/Internal hanya untuk barang jadi (FG).",
-                confirmText: "OK",
-                hideCancel: true,
-            });
-            return;
-        }
-        if (costPrice === null || costPrice < 0) { // Check for null
+        if (costPrice === null || costPrice < 0) {
             void confirm({
                 title: "Invalid Cost",
                 description: "Cost must be >= 0.",
@@ -343,10 +315,10 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
 
         const safeQty = Math.max(1, qty);
         const safeCost = Math.max(0, costPrice);
-        if (item.type !== ITEM_TYPES.FINISHED_GOOD && safeCost === 0) {
+        if (safeCost === 0) {
             void confirm({
                 title: "Invalid Cost",
-                description: "Cost tidak boleh 0 untuk RAW MATERIAL / TRADED.",
+                description: "Cost tidak boleh 0 untuk Purchase dari Supplier.",
                 confirmText: "OK",
                 hideCancel: true,
             });
@@ -381,9 +353,8 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         });
         setSelectedItemId("");
         setQty(1);
-        setCostPrice(null); // Reset to null
+        setCostPrice(null);
 
-        // Auto-focus back to item select
         setTimeout(() => {
             const btn = document.querySelector('button[role="combobox"]');
             if (btn instanceof HTMLElement) btn.focus();
@@ -402,22 +373,19 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
 
     const syncVendorItemCosts = useCallback(async (targetVendorId: string, normalizedLines: PurchaseLine[]) => {
         if (!targetVendorId || normalizedLines.length === 0) return;
-        const itemTypeById = new Map(items.map((item) => [item.id, item.type]));
-        const payload = normalizedLines
-            .filter((line) => (itemTypeById.get(line.item_id) !== ITEM_TYPES.FINISHED_GOOD))
-            .map((line) => ({
-                vendor_id: targetVendorId,
-                item_id: line.item_id,
-                unit_cost: line.cost_price,
-                last_purchase_at: purchaseDate,
-                is_active: true,
-            }));
+        const payload = normalizedLines.map((line) => ({
+            vendor_id: targetVendorId,
+            item_id: line.item_id,
+            unit_cost: line.cost_price,
+            last_purchase_at: purchaseDate,
+            is_active: true,
+        }));
         if (payload.length === 0) return;
         const { error } = await supabase
             .from("vendor_items")
             .upsert(payload, { onConflict: "vendor_id,item_id" });
         if (error) throw error;
-    }, [items, purchaseDate]);
+    }, [purchaseDate]);
 
     const handleSaveDraft = useCallback(async () => {
         if (!vendorId) {
@@ -461,7 +429,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                     setLines(normalizedLines);
                 }
 
-                // Use RPC for Atomic Update (Prevents Duplicate Items Bug)
                 const lineData = normalizedLines.map((l) => ({
                     purchase_id: initialPurchaseId,
                     item_id: l.item_id,
@@ -484,7 +451,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 if (redirectOnSave) {
                     queryClient.invalidateQueries({ queryKey: ["purchase-detail", initialPurchaseId] });
                     queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-                    navigate(`/purchases/${initialPurchaseId}`);
+                    navigate(`/purchases/${initialPurchaseId}`, { replace: true });
                 }
             } else {
                 const { data: purData, error: purError } = await supabase
@@ -538,7 +505,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 if (redirectOnSave) {
                     queryClient.invalidateQueries({ queryKey: ["purchase-detail", purId] });
                     queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-                    navigate(`/purchases/${purId}`);
+                    navigate(`/purchases/${purId}`, { replace: true });
                 }
             }
         } catch (err: unknown) {
@@ -614,7 +581,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                         <div className="lg:col-span-1 space-y-4">
                             <div>
                                 <div className="flex items-center justify-between mb-1">
-                                    <label className="text-sm font-medium text-[var(--text-main)]">Vendor</label>
+                                    <label className="text-sm font-medium text-[var(--text-main)]">Vendor (Supplier)</label>
                                     <div className="flex gap-2">
                                         {vendorId && (
                                             <button
@@ -640,8 +607,8 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                     containerClassName="mb-3"
                                     value={vendorId}
                                     onChange={(val) => setVendorId(val)}
-                                    placeholder="-- Select Vendor --"
-                                    searchPlaceholder="Search vendor..."
+                                    placeholder="-- Select Supplier --"
+                                    searchPlaceholder="Search supplier..."
                                     options={vendors.map((v) => ({
                                         label: v.name,
                                         value: v.id,
@@ -650,17 +617,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                             <div className="flex flex-col">
                                                 <div className="flex items-center gap-2">
                                                     <span className="font-medium">{v.name}</span>
-                                                    {v.vendor_type && (
-                                                        <Badge
-                                                            variant="outline"
-                                                            className={`text-xs ${v.vendor_type === 'SUPPLIER' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                                                                v.vendor_type === 'KONVEKSI' ? 'bg-purple-50 text-purple-700 border-purple-200' :
-                                                                    'bg-green-50 text-green-700 border-green-200'
-                                                                }`}
-                                                        >
-                                                            {v.vendor_type}
-                                                        </Badge>
-                                                    )}
                                                 </div>
                                                 {(v.phone || v.address) && (
                                                     <span className="text-xs text-gray-500 truncate">
@@ -671,16 +627,9 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                         )
                                     }))}
                                 />
-                                {vendorId && (
-                                    <div className="text-xs text-slate-500">
-                                        Vendor type: <span className="font-medium text-slate-700">{vendorTypeLabel}</span>
-                                        {isProductionVendor ? (
-                                            <span className="ml-1">• hanya FG, cost otomatis 0</span>
-                                        ) : (
-                                            <span className="ml-1">• RAW/TRADED wajib isi cost</span>
-                                        )}
-                                    </div>
-                                )}
+                                <div className="text-xs text-slate-500">
+                                    Purchase engine khusus untuk vendor Supplier. Untuk vendor Konveksi/Internal, gunakan modul Makloon.
+                                </div>
                             </div>
                             <Input
                                 label="Date"
@@ -744,8 +693,8 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                                             type="button"
                                                             onClick={() => {
                                                                 setItemFilter(type);
-                                                                setSelectedItemId(""); // Reset to avoid stale ID
-                                                                setCostPrice(null);    // Also reset cost
+                                                                setSelectedItemId("");
+                                                                setCostPrice(null);
                                                             }}
                                                             className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-md transition-all ${itemFilter === type
                                                                 ? "bg-white text-purple-700 shadow-sm"
@@ -764,25 +713,21 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                                 const newItemId = val;
                                                 setSelectedItemId(newItemId);
 
-                                                // Auto-fill cost price if enabled
                                                 if (newItemId) {
                                                     const item = items.find((i) => i.id === newItemId);
                                                     if (item) {
-                                                        const isFG = item.type === ITEM_TYPES.FINISHED_GOOD;
                                                         const vendorCost = vendorCostMap[item.id];
-                                                        setCostPrice(isFG ? 0 : (vendorCost ?? item.default_price_buy ?? 0));
+                                                        setCostPrice(vendorCost ?? item.default_price_buy ?? 0);
                                                     }
 
-                                                    // Auto focus to Cost Price
                                                     setTimeout(() => costInputRef.current?.focus(), 0);
                                                 }
                                             }}
                                             placeholder="Select Item..."
-                                            searchPlaceholder="Search User, SKU or Name..."
+                                            searchPlaceholder="Search SKU or Name..."
                                             options={items
                                                 .filter(i => itemFilter === "ALL" ? true : i.type === itemFilter)
                                                 .map((i) => {
-                                                    // Safe access for mapped props
                                                     const size = i.size_name;
                                                     const color = i.color_name;
                                                     const variantLabel = [size, color].filter(Boolean).join(", ");
@@ -853,14 +798,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                                 }
                                             }}
                                             containerClassName="!mb-0"
-                                            readOnly={(() => {
-                                                const item = items.find(i => i.id === selectedItemId);
-                                                return item?.type === ITEM_TYPES.FINISHED_GOOD;
-                                            })()}
-                                            className={(() => {
-                                                const item = items.find(i => i.id === selectedItemId);
-                                                return item?.type === ITEM_TYPES.FINISHED_GOOD ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "";
-                                            })()}
                                         />
                                     </div>
                                     <div className="">
@@ -880,9 +817,8 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                         .filter(l => l.item_id === selectedItemId)
                                         .reduce((sum, l) => sum + l.qty, 0);
 
-                                    const isFG = selectedItem?.type === ITEM_TYPES.FINISHED_GOOD;
                                     const masterCost = selectedItem ? (vendorCostMap[selectedItem.id] ?? selectedItem.default_price_buy ?? 0) : 0;
-                                    const isCostChanged = costPrice !== null && costPrice !== masterCost && !isFG;
+                                    const isCostChanged = costPrice !== null && costPrice !== masterCost;
 
                                     return (
                                         <div className="mt-2 space-y-1">
@@ -896,11 +832,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                                                         Harga berbeda dari referensi vendor/master ({masterCost.toLocaleString()}).
                                                         Harga vendor-item akan diupdate otomatis saat simpan.
                                                     </span>
-                                                </div>
-                                            )}
-                                            {isFG && (
-                                                <div className="text-xs text-blue-600 bg-blue-50 p-1.5 rounded border border-blue-100">
-                                                    Info: Item barang jadi (FG) cost otomatis 0.
                                                 </div>
                                             )}
                                         </div>

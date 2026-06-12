@@ -20,7 +20,6 @@ import DocumentHeaderCard from "./shared/DocumentHeaderCard";
 import LineItemsTable from "./shared/LineItemsTable";
 import RelatedDocumentsCard, { type RelatedDocumentItem } from "./shared/RelatedDocumentsCard";
 
-// Helper for error message if shared util not sufficient or local override needed
 const getErrorMessageLocal = (error: unknown) => {
   if (error instanceof Error) return error.message;
   if (typeof error === 'object' && error !== null) {
@@ -30,20 +29,6 @@ const getErrorMessageLocal = (error: unknown) => {
   return String(error);
 };
 
-type PurchaseDetail = {
-  id: string;
-  purchase_date: string;
-  purchase_no: string | null;
-  vendor_id: string;
-  vendor_name: string;
-  terms: "CASH" | "CREDIT";
-  payment_method_code?: string | null;
-  total_amount: number;
-  discount_amount?: number | null;
-  status: "DRAFT" | "POSTED" | "VOID";
-  notes: string | null;
-  created_at: string;
-};
 
 type PurchaseItem = {
   id: string;
@@ -63,7 +48,6 @@ export default function PurchaseDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // --- React Query for all detail data ---
   const { data: detailData, isLoading: loading, error: fetchError, refetch } = usePurchaseDetailQuery(id);
   const purchase = detailData?.purchase ?? null;
   const items = detailData?.items ?? [];
@@ -73,9 +57,6 @@ export default function PurchaseDetail() {
   const paymentMethodName = detailData?.paymentMethodName ?? null;
   const error = fetchError ? getErrorMessageLocal(fetchError) : null;
 
-  // --- Company banks (separate, lightweight) ---
-
-  // --- Action state (unchanged) ---
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -171,12 +152,37 @@ export default function PurchaseDetail() {
 
   async function handlePost() {
     if (!purchase) return;
+
+    const summaryContent = (
+      <div className="space-y-3 text-sm pt-2">
+        <div className="p-3 bg-slate-50 rounded border border-slate-100 space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Total Purchase:</span>
+            <span className="font-semibold">{formatCurrency(displayTotal)}</span>
+          </div>
+          {dpTotal > 0 && (
+            <div className="flex justify-between text-indigo-600 font-medium">
+              <span>DP Terbayar:</span>
+              <span>-{formatCurrency(dpTotal)}</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t pt-1 mt-1 font-bold text-slate-900">
+            <span>Sisa {purchase.terms === 'CASH' ? 'Bayar' : 'Hutang'}:</span>
+            <span>{formatCurrency(Math.max(0, displayTotal - dpTotal))}</span>
+          </div>
+        </div>
+        <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-100 italic">
+          Are you sure you want to POST? This action will update inventory and create ledger entries.
+        </div>
+      </div>
+    );
+
     const ok = await confirm({
-      title: "Post Purchase",
-      description: "Are you sure you want to POST this purchase? This action cannot be undone.",
-      confirmText: "POST",
-      cancelText: "Cancel",
-      tone: "danger",
+      title: "Konfirmasi Post Purchase",
+      description: summaryContent,
+      confirmText: "POST SEKARANG",
+      cancelText: "Batal",
+      tone: "default",
     });
     if (!ok) return;
 
@@ -185,7 +191,7 @@ export default function PurchaseDetail() {
     setPostSuccess(null);
 
     try {
-      const { data, error: rpcError } = await supabase.rpc("rpc_post_purchase", {
+      const { error: rpcError } = await supabase.rpc("rpc_post_purchase", {
         p_purchase_id: purchase.id,
       });
 
@@ -197,14 +203,7 @@ export default function PurchaseDetail() {
         }
       }
 
-      const journalSkipped =
-        (data as { journal_skipped?: boolean } | null | undefined)?.journal_skipped ??
-        (Array.isArray(data) ? (data[0] as { journal_skipped?: boolean } | undefined)?.journal_skipped : undefined);
-      setPostSuccess(
-        journalSkipped
-          ? "Purchase posted. Journal skipped (total 0 untuk FINISHED_GOOD)."
-          : "Purchase posted successfully!"
-      );
+      setPostSuccess("Purchase posted successfully!");
       queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
       refetch();
     } catch (err: unknown) {
@@ -330,11 +329,8 @@ export default function PurchaseDetail() {
     },
   ];
 
-
-
   const relatedItems: RelatedDocumentItem[] = [];
 
-  // Down Payments (DP)
   if (relatedDocs.dp_journals && relatedDocs.dp_journals.length > 0) {
     relatedDocs.dp_journals.forEach((dp) => {
       relatedItems.push({
@@ -482,7 +478,7 @@ export default function PurchaseDetail() {
       <div className="flex flex-col gap-3 print:hidden">
         <PageHeader
           title="Purchase Detail"
-          description={`Document: ${purchase.purchase_no || purchase.id.substring(0, 8)} — View purchase order details, track status, or manage supplier returns.`}
+          description={`Document: ${purchase.purchase_no || purchase.id.substring(0, 8)}`}
           breadcrumbs={[
             { label: "Purchase History", href: "/purchases/history" },
             { label: "Detail" }
@@ -549,7 +545,7 @@ export default function PurchaseDetail() {
                   POST
                 </Button>
               )}
-              {purchase.status === "DRAFT" && (
+              {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
                 <Button
                   onClick={() => navigate(`/purchases/${purchase.id}/edit`)}
                   variant="primary"
@@ -558,7 +554,7 @@ export default function PurchaseDetail() {
                   Edit
                 </Button>
               )}
-              {purchase.status === "DRAFT" && (
+              {purchase.status === "DRAFT" && (!relatedDocs.dp_journals || relatedDocs.dp_journals.length === 0) && (
                 <Button
                   variant="danger"
                   onClick={handleDeleteDraft}
@@ -624,8 +620,6 @@ export default function PurchaseDetail() {
           </div>
         )}
       </div>
-
-
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 print:hidden">
         <div className="xl:col-span-2 space-y-6">
@@ -756,10 +750,6 @@ export default function PurchaseDetail() {
         </div>
       </div>
 
-
-
-
-      {/* DP Modal */}
       <Dialog isOpen={isDPModalOpen} onClose={() => !dpLoading && setIsDPModalOpen(false)}>
         <DialogHeader>
           <DialogTitle>Bayar Down Payment (DP)</DialogTitle>
@@ -791,8 +781,8 @@ export default function PurchaseDetail() {
             label="Notes"
             value={dpNotes}
             onChange={(e) => setDpNotes(e.target.value)}
-            placeholder="DP PO-..."
-            disabled={dpLoading}
+            placeholder="Auto-generated by system"
+            disabled={true}
           />
         </div>
         </DialogContent>
@@ -806,7 +796,6 @@ export default function PurchaseDetail() {
         </DialogFooter>
       </Dialog>
 
-      {/* PO Print */}
       {purchase.status === "DRAFT" && (
         <PurchaseInvoicePrint
           data={{
@@ -817,6 +806,7 @@ export default function PurchaseDetail() {
             terms: purchase.terms,
             total_amount: displayTotal,
             discount_amount: purchase.discount_amount,
+            dp_amount: dpTotal,
             notes: purchase.notes,
             payment_method_code: purchase.payment_method_code,
           }}

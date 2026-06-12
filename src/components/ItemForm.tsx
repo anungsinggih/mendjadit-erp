@@ -12,6 +12,13 @@ import { getErrorMessage } from '../lib/errors'
 import { ITEM_TYPES } from "../lib/constants";
 import type { Item } from "../types/shared";
 
+type BomItem = {
+  id: string;
+  raw_material_id: string;
+  raw_material_name: string;
+  qty_per_fg: number;
+};
+
 type MasterData = {
     id: string
     code?: string
@@ -39,8 +46,12 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
     const [colors, setColors] = useState<MasterData[]>([])
     const [brands, setBrands] = useState<MasterData[]>([])
     const [categories, setCategories] = useState<MasterData[]>([])
+    const [rawMaterials, setRawMaterials] = useState<MasterData[]>([])
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [bomItems, setBomItems] = useState<BomItem[]>([])
+    const [bomLoading, setBomLoading] = useState(false)
+    const [bomError, setBomError] = useState<string | null>(null)
 
     const [formData, setFormData] = useState<Partial<Item>>({
         sku: '', name: '', type: ITEM_TYPES.FINISHED_GOOD,
@@ -78,6 +89,14 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
         }
     }, [formData.type, formData.default_price_buy, formData.price_default, formData.price_khusus])
 
+    useEffect(() => {
+        if (existingItem?.id && formData.type === ITEM_TYPES.FINISHED_GOOD) {
+            fetchBomData(existingItem.id)
+        } else {
+            setBomItems([])
+        }
+    }, [existingItem?.id, formData.type])
+
     async function fetchMasterData() {
         const [uomRes, sizeRes, colorRes, brandRes, categoryRes] = await Promise.all([
             supabase.from('uoms').select('id, code, name').eq('is_active', true),
@@ -92,6 +111,46 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
         if (colorRes.data) setColors(colorRes.data)
         if (brandRes.data) setBrands(brandRes.data)
         if (categoryRes.data) setCategories(categoryRes.data)
+
+        // Load raw materials for BOM
+        const { data: rawMaterialsData } = await supabase
+            .from('items')
+            .select('id, name')
+            .eq('type', ITEM_TYPES.RAW_MATERIAL)
+            .eq('is_active', true)
+            .order('name')
+
+        if (rawMaterialsData) setRawMaterials(rawMaterialsData)
+    }
+
+    async function fetchBomData(finishedGoodId: string) {
+        setBomLoading(true)
+        setBomError(null)
+        try {
+            const { data, error } = await supabase
+                .from('item_boms')
+                .select('id, raw_material_id, qty_per_fg, raw_material:items!item_boms_raw_material_id_fkey(name)')
+                .eq('finished_good_id', finishedGoodId)
+
+            if (error) throw error
+
+            setBomItems(data.map(bom => {
+                const rawMaterial = Array.isArray(bom.raw_material)
+                    ? bom.raw_material[0] as { name?: string } | undefined
+                    : bom.raw_material as { name?: string } | null
+
+                return {
+                    id: bom.id,
+                    raw_material_id: bom.raw_material_id,
+                    raw_material_name: rawMaterial?.name || '',
+                    qty_per_fg: bom.qty_per_fg
+                }
+            }))
+        } catch (err) {
+            setBomError(getErrorMessage(err, 'Failed to load BOM data'))
+        } finally {
+            setBomLoading(false)
+        }
     }
 
     async function handleSubmit(e: React.FormEvent) {
@@ -142,12 +201,19 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                 uom: normalizeText(selectedUom?.code) || 'PCS'
             }
 
+            let itemId = existingItem?.id
             if (existingItem?.id) {
                 const { error } = await supabase.from('items').update(payload).eq('id', existingItem.id)
                 if (error) throw error
             } else {
-                const { error } = await supabase.from('items').insert([payload])
+                const { data, error } = await supabase.from('items').insert([payload]).select('id').single()
                 if (error) throw error
+                itemId = data.id
+            }
+
+            // Save BOM if this is a finished good
+            if (formData.type === ITEM_TYPES.FINISHED_GOOD && itemId) {
+                await saveBom(itemId)
             }
 
             onSuccess()
@@ -155,6 +221,66 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
             setError(getErrorMessage(err, 'Unknown error'))
         } finally {
             setLoading(false)
+        }
+    }
+
+    function handleAddBomItem() {
+        setBomItems(prev => [
+            ...prev,
+            { id: '', raw_material_id: '', raw_material_name: '', qty_per_fg: 1 }
+        ])
+    }
+
+    function handleRemoveBomItem(index: number) {
+        setBomItems(prev => prev.filter((_, idx) => idx !== index))
+    }
+
+    function handleBomItemChange(index: number, field: 'raw_material_id' | 'qty_per_fg', value: string) {
+        setBomItems(prev => prev.map((item, idx) => {
+            if (idx !== index) return item
+            if (field === 'raw_material_id') {
+                const selectedMaterial = rawMaterials.find(rm => rm.id === value)
+                return {
+                    ...item,
+                    raw_material_id: value,
+                    raw_material_name: selectedMaterial?.name || '',
+                }
+            }
+            return {
+                ...item,
+                qty_per_fg: Number(value) || 0,
+            }
+        }))
+    }
+
+    async function saveBom(finishedGoodId: string) {
+        setBomError(null)
+
+        const validBomItems = bomItems.filter(item => item.raw_material_id && item.qty_per_fg > 0)
+
+        const { error: deleteError } = await supabase
+            .from('item_boms')
+            .delete()
+            .eq('finished_good_id', finishedGoodId)
+
+        if (deleteError) {
+            setBomError(getErrorMessage(deleteError, 'Failed to clear BOM data'))
+            throw deleteError
+        }
+
+        if (validBomItems.length === 0) return
+
+        const { error: insertError } = await supabase
+            .from('item_boms')
+            .insert(validBomItems.map(item => ({
+                finished_good_id: finishedGoodId,
+                raw_material_id: item.raw_material_id,
+                qty_per_fg: item.qty_per_fg,
+            })))
+
+        if (insertError) {
+            setBomError(getErrorMessage(insertError, 'Failed to save BOM data'))
+            throw insertError
         }
     }
 
@@ -170,22 +296,25 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
 
     // Helper for Select with Add Button
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SelectWithAdd = ({ label, value, onChange, options, onAdd }: any) => (
+    const SelectWithAdd = ({ label, value, onChange, options, onAdd, disabled }: any) => (
         <div className="flex flex-col mb-3">
             <div className="flex justify-between items-center mb-1.5">
                 <label className="text-sm font-medium text-[var(--text-main)]">{label}</label>
-                <button
-                    type="button"
-                    onClick={onAdd}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-0.5"
-                >
-                    <Icons.Plus className="w-3 h-3" /> New
-                </button>
+                {onAdd ? (
+                    <button
+                        type="button"
+                        onClick={onAdd}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-0.5"
+                    >
+                        <Icons.Plus className="w-3 h-3" /> New
+                    </button>
+                ) : null}
             </div>
             <select
                 className="flex h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
                 value={value || ''}
                 onChange={onChange}
+                disabled={disabled}
             >
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {options.map((opt: any) => (
@@ -310,9 +439,78 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                     />
                 </div>
                 {formData.type === ITEM_TYPES.FINISHED_GOOD && (
-                    <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
-                        Untuk FINISHED_GOOD, HPP otomatis 0 (HPP dihitung periodik saat closing).
-                    </div>
+                    <>
+                        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mb-4">
+                            Untuk FINISHED_GOOD, HPP otomatis 0 (HPP dihitung periodik saat closing).
+                        </div>
+
+                        <div className="border-t pt-4 mt-4">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="font-medium">Bill of Materials (BOM)</h3>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleAddBomItem}
+                                    disabled={bomLoading}
+                                    icon={<Icons.Plus className="w-4 h-4" />}
+                                >
+                                    Add Material
+                                </Button>
+                            </div>
+
+                            {bomError && <div className="text-red-600 text-sm bg-red-50 p-2 rounded mb-4">{bomError}</div>}
+
+                            {bomLoading ? (
+                                <div className="text-center py-4 text-gray-500">Loading BOM...</div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {bomItems.map((bomItem, index) => (
+                                        <div key={index} className="flex gap-2 items-end">
+                                            <div className="flex-1">
+                                                <SelectWithAdd
+                                                    label="Raw Material"
+                                                    value={bomItem.raw_material_id}
+                                                    onChange={(e: any) => handleBomItemChange(index, 'raw_material_id', e.target.value)}
+                                                    options={[
+                                                        { label: '-- Select Material --', value: '' },
+                                                        ...rawMaterials.map(rm => ({ label: rm.name, value: rm.id }))
+                                                    ]}
+                                                    disabled={bomLoading}
+                                                />
+                                            </div>
+                                            <div className="w-32">
+                                                <Input
+                                                    label="Qty per FG"
+                                                    type="number"
+                                                    min="0.01"
+                                                    step="0.01"
+                                                    value={bomItem.qty_per_fg}
+                                                    onChange={(e) => handleBomItemChange(index, 'qty_per_fg', e.target.value)}
+                                                    disabled={bomLoading}
+                                                />
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleRemoveBomItem(index)}
+                                                disabled={bomLoading}
+                                            >
+                                                <Icons.Trash className="w-4 h-4 text-red-500" />
+                                            </Button>
+                                        </div>
+                                    ))}
+
+                                    {bomItems.length === 0 && (
+                                        <div className="text-center py-4 text-gray-500">
+                                            No materials added to BOM
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </>
                 )}
 
                 <Checkbox label="Active" checked={formData.is_active} onChange={e => setFormData({ ...formData, is_active: e.target.checked })} />

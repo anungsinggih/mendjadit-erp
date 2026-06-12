@@ -186,16 +186,69 @@ export default function PurchaseHistory() {
   const { data: draftReturnCount = 0, refetch: refetchDraftCount } = usePurchaseReturnDraftCountQuery();
 
   const handlePost = useCallback(async (purchaseId: string) => {
-    const ok = await confirm({
-      title: "Post Purchase",
-      description: "Are you sure you want to POST this purchase? This action cannot be undone.",
-      confirmText: "POST",
-      cancelText: "Cancel",
-      tone: "danger",
-    });
-    if (!ok) return;
+    const purchase = filteredPurchases.find(p => p.id === purchaseId);
+    if (!purchase) return;
 
     setPostingId(purchaseId);
+    let dpTotal = 0;
+    try {
+      const { data: dpData } = await supabase
+        .from('journals')
+        .select('id')
+        .eq('ref_type', 'PURCHASE_DP')
+        .eq('ref_id', purchaseId);
+      
+      if (dpData && dpData.length > 0) {
+        // Fetch journal lines to get amount
+        const { data: lines } = await supabase
+          .from('journal_lines')
+          .select('debit')
+          .in('journal_id', dpData.map(d => d.id))
+          .gt('debit', 0);
+        dpTotal = (lines || []).reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
+      }
+    } catch (err) {
+      console.error("Failed to fetch DP info", err);
+    }
+
+    const summaryContent = (
+      <div className="space-y-3 text-sm pt-2 text-left">
+        <div className="p-3 bg-slate-50 rounded border border-slate-100 space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Total Purchase:</span>
+            <span className="font-semibold">{formatCurrency(purchase.total_amount)}</span>
+          </div>
+          {dpTotal > 0 && (
+            <div className="flex justify-between text-indigo-600 font-medium">
+              <span>DP Terbayar:</span>
+              <span>-{formatCurrency(dpTotal)}</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t pt-1 mt-1 font-bold text-slate-900">
+            <span>Sisa {purchase.terms === 'CASH' ? 'Bayar' : 'Hutang'}:</span>
+            <span>{formatCurrency(Math.max(0, purchase.total_amount - dpTotal))}</span>
+          </div>
+        </div>
+        <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-100 italic">
+          Apakah Anda yakin ingin POST? Stok akan bertambah dan jurnal akan terbentuk.
+        </div>
+      </div>
+    );
+
+    const ok = await confirm({
+      title: "Konfirmasi Post Purchase",
+      description: summaryContent,
+      confirmText: "POST SEKARANG",
+      cancelText: "Batal",
+      tone: "default",
+    });
+
+    if (!ok) {
+      setPostingId(null);
+      return;
+    }
+
+    // Still in setPostingId(purchaseId) state
     setError(null);
     setSuccess(null);
 
@@ -233,7 +286,7 @@ export default function PurchaseHistory() {
     } finally {
       setPostingId(null);
     }
-  }, [confirm, navigate]);
+  }, [confirm, navigate, filteredPurchases]);
 
   const handleOpen = useCallback((id: string) => navigate(`/purchases/${id}`), [navigate]);
   const handleEdit = useCallback((id: string) => navigate(`/purchases/${id}/edit`), [navigate]);

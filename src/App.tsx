@@ -59,6 +59,7 @@ const Attributes = lazy(() => import("./components/Attributes"));
 const Items = lazy(() => import("./components/Items"));
 const BrandsCategories = lazy(() => import("./components/BrandsCategories"));
 const Inventory = lazy(() => import("./components/Inventory"));
+const Makloon = lazy(() => import("./components/Makloon"));
 
 import type { Session } from "@supabase/supabase-js";
 
@@ -315,6 +316,11 @@ function App() {
                     Purchase
                   </SidebarLink>
                 </div>
+                <div className="px-2">
+                  <SidebarLink to="/makloon" icon={Icons.Factory}>
+                    Makloon
+                  </SidebarLink>
+                </div>
 
                 <div className="px-2">
                   <SidebarLink to="/inventory" icon={Icons.Chart}>
@@ -554,6 +560,7 @@ function App() {
                       element={<BrandsCategories />}
                     />
                     <Route path="/items" element={<Items />} />
+                    <Route path="/makloon/*" element={<Makloon />} />
                     {/* DEV ONLY Route */}
                     {isLocalhost && (
                       <Route path="/dev-reset" element={<DevResetData />} />
