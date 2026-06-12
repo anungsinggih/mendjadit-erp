@@ -47,9 +47,13 @@ type ReturnItem = {
 type Props = {
     onSuccess: (msg: string) => void;
     onError: (msg: string) => void;
+    embedded?: boolean;
+    initialPurchaseId?: string;
+    onSaved?: (returnId: string) => void;
+    onCancel?: () => void;
 };
 
-export function PurchaseReturnForm({ onSuccess, onError }: Props) {
+export function PurchaseReturnForm({ onSuccess, onError, embedded = false, initialPurchaseId, onSaved, onCancel }: Props) {
     const navigate = useNavigate()
     const { confirm } = useConfirm()
     const queryClient = useQueryClient()
@@ -176,10 +180,15 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
     }, [draftId, fetchDraft])
 
     useEffect(() => {
+        if (initialPurchaseId) {
+            setSelectedPurchaseId(initialPurchaseId)
+            ensurePurchaseInList(initialPurchaseId)
+            return
+        }
         if (!purchaseParamId || draftId) return
         setSelectedPurchaseId(purchaseParamId)
         ensurePurchaseInList(purchaseParamId)
-    }, [purchaseParamId, draftId, ensurePurchaseInList])
+    }, [initialPurchaseId, purchaseParamId, draftId, ensurePurchaseInList])
 
     useEffect(() => {
         if (!selectedPurchaseId || isEditing) return
@@ -233,7 +242,15 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
 
     function handleAddItem(pItem: PurchaseItem, returnQty: number) {
         if (returnQty <= 0) return
-        if (returnQty > pItem.qty) {
+        const safeCost = pItem.unit_cost ?? 0
+        const existingQty = lines.find(l =>
+            l.item_id === pItem.item_id &&
+            l.unit_cost === safeCost &&
+            l.uom === pItem.uom_snapshot
+        )?.qty || 0
+        const nextQty = existingQty + returnQty
+
+        if (nextQty > pItem.qty) {
             void confirm({
                 title: "Invalid Quantity",
                 description: `Cannot return more than purchased qty (${pItem.qty})`,
@@ -248,7 +265,6 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
             l.unit_cost === pItem.unit_cost &&
             l.uom === pItem.uom_snapshot
         )
-        const safeCost = pItem.unit_cost ?? 0
         if (existing) {
             const newLines = lines.map(l => {
                 if (
@@ -287,76 +303,45 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
         setLoading(true)
 
         try {
-            const returnDate = draftReturnDate || new Date().toISOString().split('T')[0]
             const normalizedLines = normalizeLines(lines)
-            const totalAmount = normalizedLines.reduce((sum, line) => sum + (line.subtotal || 0), 0)
+            const returnDate = draftReturnDate || new Date().toISOString().split('T')[0]
+            const itemsPayload = normalizedLines.map(l => ({
+                item_id: l.item_id,
+                uom_snapshot: l.uom,
+                qty: l.qty,
+                unit_cost: l.unit_cost,
+                subtotal: l.subtotal
+            }))
+
+            const { data, error } = await supabase.rpc('rpc_save_purchase_return_draft', {
+                p_return_id: draftId,
+                p_purchase_id: selectedPurchaseId,
+                p_return_date: returnDate,
+                p_payment_method_code: paymentMethodCode || 'CASH',
+                p_notes: notes || null,
+                p_items: itemsPayload
+            })
+            if (error) throw error
+
+            const savedReturnId = (data as { return_id?: string } | null)?.return_id || draftId
+            if (!savedReturnId) {
+                throw new Error('Purchase return draft save did not return return id')
+            }
 
             if (isEditing && draftId) {
-                const { error: updateError } = await supabase
-                    .from('purchase_returns')
-                    .update({
-                        purchase_id: selectedPurchaseId,
-                        return_date: returnDate,
-                        status: 'DRAFT',
-                        total_amount: totalAmount,
-                        notes: notes || null,
-                        payment_method_code: paymentMethodCode || 'CASH'
-                    })
-                    .eq('id', draftId)
-                if (updateError) throw updateError
-
-                const itemsPayload = normalizedLines.map(l => ({
-                    item_id: l.item_id,
-                    uom_snapshot: l.uom,
-                    qty: l.qty,
-                    unit_cost: l.unit_cost,
-                    subtotal: l.subtotal
-                }))
-                const { error: linesError } = await supabase.rpc('rpc_update_purchase_return_draft_items', {
-                    p_return_id: draftId,
-                    p_items: itemsPayload
-                })
-                if (linesError) throw linesError
-
-                onSuccess(`Return Draft Updated: ${draftId}`)
-                queryClient.invalidateQueries({ queryKey: ["purchase-return-detail", draftId] })
+                onSuccess(`Return Draft Updated: ${savedReturnId}`)
+                queryClient.invalidateQueries({ queryKey: ["purchase-return-detail", savedReturnId] })
                 queryClient.invalidateQueries({ queryKey: ["purchase-returns-history"] })
-                navigate(`/purchase-returns/${draftId}`)
+                queryClient.invalidateQueries({ queryKey: ["purchase-return-draft-count"] })
+                onSaved?.(savedReturnId)
+                if (!embedded) navigate(`/purchase-returns/${savedReturnId}`)
             } else {
-                // 1. Header
-                const { data: retData, error: retError } = await supabase
-                    .from('purchase_returns')
-                    .insert([{
-                        purchase_id: selectedPurchaseId,
-                        return_date: returnDate,
-                        status: 'DRAFT',
-                        total_amount: totalAmount,
-                        notes: notes || null,
-                        payment_method_code: paymentMethodCode || 'CASH'
-                    }])
-                    .select()
-                    .single()
-
-                if (retError) throw retError
-
-                // 2. Items
-                const itemsPayload = normalizedLines.map(l => ({
-                    item_id: l.item_id,
-                    uom_snapshot: l.uom,
-                    qty: l.qty,
-                    unit_cost: l.unit_cost,
-                    subtotal: l.subtotal
-                }))
-                const { error: linesError } = await supabase.rpc('rpc_update_purchase_return_draft_items', {
-                    p_return_id: retData.id,
-                    p_items: itemsPayload
-                })
-                if (linesError) throw linesError
-
-                onSuccess(`Return Draft Created: ${retData.id}`)
-                queryClient.invalidateQueries({ queryKey: ["purchase-return-detail", retData.id] })
+                onSuccess(`Return Draft Created: ${savedReturnId}`)
+                queryClient.invalidateQueries({ queryKey: ["purchase-return-detail", savedReturnId] })
                 queryClient.invalidateQueries({ queryKey: ["purchase-returns-history"] })
-                navigate(`/purchase-returns/${retData.id}`)
+                queryClient.invalidateQueries({ queryKey: ["purchase-return-draft-count"] })
+                onSaved?.(savedReturnId)
+                if (!embedded) navigate(`/purchase-returns/${savedReturnId}`)
             }
 
             setLines([])
@@ -375,52 +360,74 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
         }
     }
 
+    const selectedPurchase = postedPurchases.find(p => p.id === selectedPurchaseId);
+
     return (
-        <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return</h2>
-                <div className="flex gap-2">
-                    <Button onClick={() => navigate('/purchase-returns/history')} variant="outline" icon={<Icons.FileText className="w-4 h-4" />}>
-                        Return History
-                    </Button>
+        <div className="space-y-4">
+            {!embedded && (
+                <div className="flex justify-between items-center">
+                    <h2 className="hidden md:block text-3xl font-bold tracking-tight text-gray-900">Purchase Return</h2>
+                    <div className="flex gap-2">
+                        <Button onClick={() => navigate('/purchase-returns/history')} variant="outline" icon={<Icons.FileText className="w-4 h-4" />}>
+                            Return History
+                        </Button>
+                    </div>
                 </div>
-            </div>
-            <Card className="shadow-md border-gray-200">
-                <CardHeader className="bg-purple-50/50 pb-4 border-b border-purple-100">
-                    <CardTitle className="text-purple-900 flex items-center gap-2">
-                        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-100 text-purple-700 text-xs font-bold ring-1 ring-purple-200">1</span>
-                        Select Original Purchase
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-6">
-                    <Select
-                        label="Purchase Bill Source"
-                        value={selectedPurchaseId}
-                        onChange={e => setSelectedPurchaseId(e.target.value)}
-                        disabled={isEditing}
-                        className="font-mono text-sm"
-                        options={[
-                            { label: "-- Select Purchase --", value: "" },
-                            ...postedPurchases.map(s => ({
-                                label: `${s.purchase_date} • ${s.purchase_no || 'No Ref'} • ${s.vendor.name} • ${formatCurrency(s.total_amount)}`,
-                                value: s.id
-                            }))
-                        ]}
-                    />
-                </CardContent>
-            </Card>
+            )}
+            {!embedded && (
+                <Card className="shadow-md border-gray-200">
+                    <CardHeader className="bg-purple-50/50 pb-4 border-b border-purple-100">
+                        <CardTitle className="text-purple-900 flex items-center gap-2">
+                            <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-100 text-purple-700 text-xs font-bold ring-1 ring-purple-200">1</span>
+                            Select Original Purchase
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-6">
+                        <Select
+                            label="Purchase Bill Source"
+                            value={selectedPurchaseId}
+                            onChange={e => setSelectedPurchaseId(e.target.value)}
+                            disabled={isEditing}
+                            className="font-mono text-sm"
+                            options={[
+                                { label: "-- Select Purchase --", value: "" },
+                                ...postedPurchases.map(s => ({
+                                    label: `${s.purchase_date} • ${s.purchase_no || 'No Ref'} • ${s.vendor.name} • ${formatCurrency(s.total_amount)}`,
+                                    value: s.id
+                                }))
+                            ]}
+                        />
+                    </CardContent>
+                </Card>
+            )}
+            {embedded && (
+                <div className="text-sm text-gray-600 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 flex flex-wrap items-center gap-2">
+                    <Icons.FileText className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    {selectedPurchase ? (
+                        <>
+                            <span className="font-medium text-slate-800">{selectedPurchase.purchase_no || selectedPurchase.id.substring(0, 8)}</span>
+                            <span className="text-slate-400">•</span>
+                            <span className="truncate">{selectedPurchase.vendor.name}</span>
+                            <span className="text-slate-400">•</span>
+                            <span className="font-mono">{formatCurrency(selectedPurchase.total_amount)}</span>
+                        </>
+                    ) : (
+                        <span className="text-slate-400 italic">Memuat data purchase...</span>
+                    )}
+                </div>
+            )}
 
             {selectedPurchaseId && (
                 <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
-                    <Card className="shadow-md border-gray-200">
-                        <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100">
-                            <CardTitle className="text-gray-800 flex items-center gap-2">
-                                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold ring-1 ring-gray-200">2</span>
+                    <Card className="shadow-sm border-gray-200">
+                        <CardHeader className="bg-gray-50/50 pb-3 border-b border-gray-100 pt-4 px-4">
+                            <CardTitle className="text-gray-800 text-sm flex items-center gap-2">
+                                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-bold ring-1 ring-gray-200">{embedded ? '1' : '2'}</span>
                                 Return Details
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="pt-6 space-y-4">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <CardContent className="pt-4 pb-4 px-4 space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <Input
                                     label="Return Date"
                                     type="date"
@@ -439,178 +446,149 @@ export function PurchaseReturnForm({ onSuccess, onError }: Props) {
                                 label="Notes"
                                 placeholder="Reason / notes"
                                 value={notes}
+                                rows={2}
                                 onChange={(e) => setNotes(e.target.value)}
                             />
                         </CardContent>
                     </Card>
 
-                    <Card className="shadow-md border-gray-200">
-                        <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100">
-                            <CardTitle className="text-gray-800 flex items-center gap-2">
-                                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold ring-1 ring-gray-200">3</span>
+                    <Card className="shadow-sm border-gray-200">
+                        <CardHeader className="bg-gray-50/50 pb-3 border-b border-gray-100 pt-4 px-4">
+                            <CardTitle className="text-gray-800 text-sm flex items-center gap-2">
+                                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-bold ring-1 ring-gray-200">{embedded ? '2' : '3'}</span>
                                 Select Items to Return
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="pt-6 space-y-8">
+                        <CardContent className="pt-4 pb-4 px-4 space-y-4">
 
                             {/* Available Items */}
                             <div className="space-y-3">
-                                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                                    Available Items from Bill
-                                </h4>
-                                <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm text-left">
-                                            <thead className="bg-gray-50 text-gray-500 font-medium border-b border-gray-200">
-                                                <tr>
-                                                    <th className="px-4 py-3">Item / SKU</th>
-                                                    <th className="px-4 py-3 text-right">Bought Qty</th>
-                                                    <th className="px-4 py-3 text-right">Cost</th>
-                                                    <th className="px-4 py-3 text-center w-32">Return Qty</th>
-                                                    <th className="px-4 py-3 text-right w-24">Action</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100 bg-white">
-                                                {availableRows.length === 0 ? (
-                                                    <tr>
-                                                        <td colSpan={5} className="px-4 py-8 text-center text-gray-400 italic">No items found in this bill</td>
-                                                    </tr>
-                                                ) : (
-                                                    availableRows.map((row) => (
-                                                        <tr key={row.id} className="hover:bg-purple-50/30 transition-colors group">
-                                                            <td className="px-4 py-2">
-                                                                <div className="font-medium text-gray-900">{row.item.name}</div>
-                                                                <div className="text-xs text-gray-500 font-mono">{row.item.sku}</div>
-                                                            </td>
-                                                            <td className="px-4 py-2 text-right font-mono text-gray-600">{row.qty}</td>
-                                                            <td className="px-4 py-2 text-right font-mono text-gray-600">{formatCurrency(row.unit_cost)}</td>
-                                                            <td className="px-4 py-2">
-                                                                <Input
-                                                                    id={row._inputId}
-                                                                    type="number"
-                                                                    defaultValue=""
-                                                                    placeholder="0"
-                                                                    min={0}
-                                                                    max={row.qty}
-                                                                    className="h-8 text-center"
-                                                                    containerClassName="!mb-0"
-                                                                    onKeyDown={(e) => {
-                                                                        if (e.key === "Enter") {
-                                                                            e.preventDefault();
-                                                                            const raw = (e.target as HTMLInputElement).value;
-                                                                            const val = raw === "" ? 0 : parseFloat(raw);
-                                                                            handleAddItem(row, val);
-                                                                            (e.target as HTMLInputElement).value = "";
-                                                                        }
-                                                                    }}
-                                                                />
-                                                            </td>
-                                                            <td className="px-4 py-2 text-right">
-                                                                <Button
-                                                                    size="sm"
-                                                                    variant="outline"
-                                                                    className="h-8 text-xs hover:bg-purple-100 hover:text-purple-700 hover:border-purple-300 transition-all"
-                                                                    onClick={() => {
-                                                                        const inputEl = document.getElementById(row._inputId) as HTMLInputElement;
-                                                                        const val = inputEl.value === "" ? 0 : parseFloat(inputEl.value);
-                                                                        handleAddItem(row, val);
-                                                                        inputEl.value = "";
-                                                                    }}
-                                                                >
-                                                                    Add
-                                                                </Button>
-                                                            </td>
-                                                        </tr>
-                                                    ))
-                                                )}
-                                            </tbody>
-                                        </table>
+                                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Available Items from Bill</p>
+                                <div className="space-y-3">
+                                    {availableRows.length === 0 ? (
+                                        <div className="p-6 text-center border rounded-lg bg-gray-50 text-gray-400 italic text-sm">
+                                            No items found in this bill
+                                        </div>
+                                    ) : (
+                                        availableRows.map((row) => (
+                                            <div key={row.id} className="border border-gray-200 rounded-lg bg-white hover:border-purple-200 transition-colors">
+                                                <div className="flex justify-between items-start p-3 pb-2">
+                                                    <div>
+                                                        <div className="font-medium text-gray-900 text-sm">{row.item.name}</div>
+                                                        <div className="text-xs text-gray-500 font-mono">{row.item.sku}</div>
+                                                    </div>
+                                                    <div className="flex gap-4 text-right ml-4 flex-shrink-0">
+                                                        <div>
+                                                            <div className="text-[10px] text-gray-400 uppercase">Qty</div>
+                                                            <div className="text-sm font-mono font-medium">{row.qty} {row.uom_snapshot}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] text-gray-400 uppercase">Cost</div>
+                                                            <div className="text-sm font-mono font-medium">{formatCurrency(row.unit_cost)}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                <div className="px-3 pb-3 flex items-end gap-2 min-w-0">
+                                    <div className="flex-1 min-w-0">
+                                        <Input
+                                            id={row._inputId}
+                                            label="Return Qty"
+                                            type="number"
+                                            defaultValue=""
+                                            placeholder="0"
+                                            min={0}
+                                            max={row.qty}
+                                            containerClassName="!mb-0"
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    const raw = (e.target as HTMLInputElement).value;
+                                                    const val = raw === "" ? 0 : parseFloat(raw);
+                                                    handleAddItem(row, val);
+                                                    (e.target as HTMLInputElement).value = "";
+                                                }
+                                            }}
+                                        />
                                     </div>
+                                    <Button
+                                        variant="outline"
+                                        className="h-10 px-3 flex-shrink-0 whitespace-nowrap hover:bg-purple-100 hover:text-purple-700 hover:border-purple-300 transition-all"
+                                        onClick={() => {
+                                            const inputEl = document.getElementById(row._inputId) as HTMLInputElement;
+                                            const val = inputEl.value === "" ? 0 : parseFloat(inputEl.value);
+                                            handleAddItem(row, val);
+                                            inputEl.value = "";
+                                        }}
+                                    >
+                                        Add
+                                    </Button>
+                                </div>
+                                            </div>
+                                        ))
+                                    )}
                                 </div>
                             </div>
 
-                            <Separator />
+                            {lines.length > 0 && <Separator />}
 
                             {/* Draft Preview */}
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                                        Return Draft Items
-                                        <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px]">{lines.length}</span>
-                                    </h4>
-                                    {linesTotal > 0 && (
-                                        <div className="text-sm font-semibold text-gray-900 bg-green-50 px-3 py-1 rounded border border-green-100">
+                            {lines.length > 0 && (
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                                            Return Draft
+                                            <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px]">{lines.length}</span>
+                                        </p>
+                                        <div className="text-sm font-bold text-gray-900 bg-green-50 px-3 py-1 rounded-md border border-green-200">
                                             Total: {formatCurrency(linesTotal)}
                                         </div>
-                                    )}
-                                </div>
+                                    </div>
 
-                                <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm bg-gray-50/30">
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm text-left">
-                                            <thead className="bg-gray-100 text-gray-500 font-medium border-b border-gray-200">
-                                                <tr>
-                                                    <th className="px-4 py-3">Item / SKU</th>
-                                                    <th className="px-4 py-3 text-right">Return Qty</th>
-                                                    <th className="px-4 py-3 text-right">Cost Refund</th>
-                                                    <th className="px-4 py-3 text-right">Subtotal</th>
-                                                    <th className="px-4 py-3 text-right w-16"></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100 bg-white">
-                                                {lines.length === 0 ? (
-                                                    <tr>
-                                                        <td colSpan={5} className="px-4 py-12 text-center text-gray-400 italic">
-                                                            No items added to return draft yet.
-                                                        </td>
-                                                    </tr>
-                                                ) : (
-                                                    lines.map((line, index) => (
-                                                        <tr key={index} className="hover:bg-red-50/10 transition-colors">
-                                                            <td className="px-4 py-3">
-                                                                <div className="font-medium text-gray-900">{line.name}</div>
-                                                                <div className="text-xs text-gray-500 font-mono">{line.sku}</div>
-                                                            </td>
-                                                            <td className="px-4 py-3 text-right font-mono">
-                                                                {line.qty} <span className="text-gray-400 text-xs">{line.uom}</span>
-                                                            </td>
-                                                            <td className="px-4 py-3 text-right font-mono text-gray-600">{formatCurrency(line.unit_cost)}</td>
-                                                            <td className="px-4 py-3 text-right font-mono font-medium text-gray-900">{formatCurrency(line.subtotal)}</td>
-                                                            <td className="px-4 py-3 text-right">
-                                                                <button
-                                                                    onClick={() => removeLine(index)}
-                                                                    className="text-gray-400 hover:text-red-600 transition-colors p-1"
-                                                                >
-                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-trash-2"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></svg>
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    ))
-                                                )}
-                                            </tbody>
-                                            {lines.length > 0 && (
-                                                <tfoot className="bg-gray-50 font-semibold border-t border-gray-200">
-                                                    <tr>
-                                                        <td colSpan={3} className="px-4 py-3 text-right text-gray-600">Total Return Value</td>
-                                                        <td className="px-4 py-3 text-right font-mono text-gray-900">{formatCurrency(linesTotal)}</td>
-                                                        <td></td>
-                                                    </tr>
-                                                </tfoot>
-                                            )}
-                                        </table>
+                                    <div className="space-y-2">
+                                        {lines.map((line, index) => (
+                                            <div key={index} className="flex items-center gap-3 p-3 border border-purple-100 bg-purple-50/30 rounded-lg">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-gray-900 text-sm truncate">{line.name}</div>
+                                                    <div className="text-xs text-gray-500 font-mono">{line.sku}</div>
+                                                    <div className="text-xs text-gray-600 mt-0.5">
+                                                        {formatCurrency(line.unit_cost)} × {line.qty} {line.uom}
+                                                    </div>
+                                                </div>
+                                                <div className="text-right flex-shrink-0">
+                                                    <div className="font-mono font-bold text-purple-700 text-sm">{formatCurrency(line.subtotal)}</div>
+                                                </div>
+                                                <button
+                                                    onClick={() => removeLine(index)}
+                                                    className="text-gray-400 hover:text-red-600 transition-colors p-1.5 flex-shrink-0 hover:bg-red-50 rounded"
+                                                    title="Remove"
+                                                >
+                                                    <Icons.Trash className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
+                            )}
 
-                                <div className="flex justify-end pt-4">
+                            <div className="flex justify-end gap-3 pt-2">
+                                {embedded && (
                                     <Button
-                                        onClick={handleSaveDraft}
-                                        disabled={loading || lines.length === 0}
-                                        className="w-full sm:w-auto min-w-[120px] sm:min-w-[150px] bg-purple-600 hover:bg-purple-700 shadow-sm"
-                                        isLoading={loading}
+                                        onClick={onCancel}
+                                        variant="outline"
+                                        disabled={loading}
+                                        className="min-w-[100px]"
                                     >
-                                        Save Return Draft
+                                        Batal
                                     </Button>
-                                </div>
+                                )}
+                                <Button
+                                    onClick={handleSaveDraft}
+                                    disabled={loading || lines.length === 0}
+                                    className="min-w-[140px] bg-purple-600 hover:bg-purple-700 shadow-sm"
+                                    isLoading={loading}
+                                >
+                                    Save Return Draft
+                                </Button>
                             </div>
                         </CardContent>
                     </Card>

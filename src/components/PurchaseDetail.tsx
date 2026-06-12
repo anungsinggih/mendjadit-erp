@@ -19,6 +19,7 @@ import { formatCurrency, formatDate, safeDocNo } from "../lib/format";
 import DocumentHeaderCard from "./shared/DocumentHeaderCard";
 import LineItemsTable from "./shared/LineItemsTable";
 import RelatedDocumentsCard, { type RelatedDocumentItem } from "./shared/RelatedDocumentsCard";
+import { PurchaseReturnForm } from "./PurchaseReturnForm";
 
 const getErrorMessageLocal = (error: unknown) => {
   if (error instanceof Error) return error.message;
@@ -64,6 +65,7 @@ export default function PurchaseDetail() {
   const [postSuccess, setPostSuccess] = useState<string | null>(null);
   const [isPosting, setIsPosting] = useState(false);
   const [isDPModalOpen, setIsDPModalOpen] = useState(false);
+  const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [dpDate, setDpDate] = useState(new Date().toISOString().split("T")[0]);
   const [dpAmount, setDpAmount] = useState<number>(0);
   const [dpAccountId, setDpAccountId] = useState("");
@@ -502,7 +504,7 @@ export default function PurchaseDetail() {
                 )}
               {purchase.status === "POSTED" && (
                 <Button
-                  onClick={() => navigate(`/purchase-return?purchase=${purchase.id}`)}
+                  onClick={() => setIsReturnModalOpen(true)}
                   variant="primary"
                   icon={<Icons.Plus className="w-4 h-4" />}
                 >
@@ -749,6 +751,25 @@ export default function PurchaseDetail() {
           </div>
         </div>
       </div>
+
+      <Dialog isOpen={isReturnModalOpen} onClose={() => setIsReturnModalOpen(false)}>
+        <DialogHeader>
+          <DialogTitle>Create Purchase Return</DialogTitle>
+        </DialogHeader>
+        <DialogContent>
+          <PurchaseReturnForm
+            embedded
+            initialPurchaseId={purchase.id}
+            onSuccess={(msg) => setPostSuccess(msg)}
+            onError={(msg) => setPostError(msg)}
+            onSaved={() => {
+              setIsReturnModalOpen(false);
+              refetch();
+            }}
+            onCancel={() => setIsReturnModalOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog isOpen={isDPModalOpen} onClose={() => !dpLoading && setIsDPModalOpen(false)}>
         <DialogHeader>

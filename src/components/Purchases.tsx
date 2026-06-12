@@ -6,11 +6,11 @@ export default function Purchases() {
   const { toast } = useToast();
 
   function handleSuccess(msg: string) {
-    toast(msg, 'success');
+    toast(msg, "success");
   }
 
   function handleError(msg: string) {
-    toast(msg, 'error');
+    toast(msg, "error");
   }
 
   return (
@@ -19,14 +19,13 @@ export default function Purchases() {
         <PageHeader
           title="Purchases"
           description="Record new purchases, manage stock entries, and track supplier invoices."
+          breadcrumbs={[{ label: "Dashboard", href: "/" }, { label: "Purchases" }, { label: "New Purchase" }]}
         />
       </div>
-
 
       <div className="space-y-6">
         <PurchaseEntryForm onSuccess={handleSuccess} onError={handleError} />
       </div>
     </div>
-
   );
 }

@@ -1,6 +1,6 @@
 # Mendjahit — Phase 1 (ERP Dagang Konveksi)
 
-Internal ERP for the Konveksi business: sales, purchases, inventory, and finance (AR/AP). Phase 1 is *locked scope*—refer to `.agent/rules/PHASE-1-SCOPE-PROJECT.md` and `.agent/rules/IMPLEMENTATION-CHECKLIST-PHASE-1.md` before adding anything new.
+Internal ERP for the Konveksi business: sales, purchases, inventory, and finance (AR/AP). Phase 1 is *locked scope*—refer to `.agents/RULES.md`, `.agents/SKILL.md`, and `.agents/MEMORY_BANK.md` before adding anything new.
 
 ## Highlights
 
@@ -39,19 +39,19 @@ The Dockerfiles and Compose service are optimized for local development only (ho
 
 `supabase/config.toml` is already populated so the CLI uses port 54321 for the API, 54322 for Postgres, and seeds the database automatically. Update it only if your local port layout or auth settings need to change.
 
-### Product-centric master data
+### Master data
 
-The UI now treats "Products" as the canonical record: the `/products` page lists `product_parents` plus the count of variants, and the `ProductForm` (header + variant table) saves both parent and item rows via `rpc_save_product_complete` so every variant has a parent. The old `Items` routes/forms are being deprecated; follow the new flow to guarantee `parent_id` is always present before any item touches posting or inventory logic.
+The current UI uses the `/items` route as the canonical item master-data surface. `items.type` supports `FINISHED_GOOD`, `RAW_MATERIAL`, and `TRADED`, and current purchase / inventory / return flows operate directly on `items` rather than `product_parents`.
 
-Supabase migrations live under `supabase/migrations`. Follow the order in the `.agent` rule documents before touching production data.
+Supabase migrations live under `supabase/migrations`. Follow the order in the `.agents` project guidance before touching production data.
 
 ## Documentation
 
 - `PHASE_1_LOCKED.md`: concise scope lock summary (new).
 - `PHASE_1_FEATURES.md`: feature checklist derived from the official phase documentation (new).
-- `.agent/rules/PHASE-1-SCOPE-PROJECT.md`: primary scope statement.
-- `.agent/rules/IMPLEMENTATION-CHECKLIST-PHASE-1.md`: detailed checklist and guardrails.
-- `.agent/rules/docs/ARCHITECTURE_LOCK.md`: infrastructure & architectural constraints.
+- `.agents/RULES.md`: project-wide operating rules.
+- `.agents/SKILL.md`: repo-local execution guide.
+- `.agents/MEMORY_BANK.md`: durable project context.
 
 ## Manual checks
 

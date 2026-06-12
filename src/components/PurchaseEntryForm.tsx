@@ -371,22 +371,6 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         [itemsTotal, discountAmount]
     );
 
-    const syncVendorItemCosts = useCallback(async (targetVendorId: string, normalizedLines: PurchaseLine[]) => {
-        if (!targetVendorId || normalizedLines.length === 0) return;
-        const payload = normalizedLines.map((line) => ({
-            vendor_id: targetVendorId,
-            item_id: line.item_id,
-            unit_cost: line.cost_price,
-            last_purchase_at: purchaseDate,
-            is_active: true,
-        }));
-        if (payload.length === 0) return;
-        const { error } = await supabase
-            .from("vendor_items")
-            .upsert(payload, { onConflict: "vendor_id,item_id" });
-        if (error) throw error;
-    }, [purchaseDate]);
-
     const handleSaveDraft = useCallback(async () => {
         if (!vendorId) {
             onError("Select Vendor");
@@ -407,92 +391,46 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
 
         setLoading(true);
         try {
+            const normalizedLines = normalizeLines(lines);
+            if (normalizedLines.length !== lines.length) {
+                setLines(normalizedLines);
+            }
+
+            const lineData = normalizedLines.map((l) => ({
+                item_id: l.item_id,
+                qty: l.qty,
+                unit_cost: l.cost_price,
+                subtotal: l.subtotal,
+                uom_snapshot: l.uom,
+            }));
+
+            const { data, error: rpcError } = await supabase.rpc("rpc_save_purchase_draft", {
+                p_purchase_id: initialPurchaseId ?? null,
+                p_vendor_id: vendorId,
+                p_purchase_date: purchaseDate,
+                p_terms: terms,
+                p_payment_method_code: terms === "CASH" ? paymentMethodCode : null,
+                p_notes: notes || null,
+                p_discount_amount: discountAmount || 0,
+                p_items: lineData,
+            });
+
+            if (rpcError) throw rpcError;
+
+            const savedPurchaseId = (data as { purchase_id?: string } | null)?.purchase_id || initialPurchaseId;
+            if (!savedPurchaseId) {
+                throw new Error("Purchase draft save did not return purchase id");
+            }
+
             if (initialPurchaseId) {
-                const { error: headerError } = await supabase
-                    .from("purchases")
-                    .update({
-                        vendor_id: vendorId,
-                        purchase_date: purchaseDate,
-                        terms,
-                        notes: notes || null,
-                        total_amount: totalAmount,
-                        discount_amount: discountAmount || 0,
-                        payment_method_code: terms === "CASH" ? paymentMethodCode : null,
-                    })
-                    .eq("id", initialPurchaseId)
-                    .eq("status", "DRAFT");
-
-                if (headerError) throw headerError;
-
-                const normalizedLines = normalizeLines(lines);
-                if (normalizedLines.length !== lines.length) {
-                    setLines(normalizedLines);
-                }
-
-                const lineData = normalizedLines.map((l) => ({
-                    purchase_id: initialPurchaseId,
-                    item_id: l.item_id,
-                    qty: l.qty,
-                    unit_cost: l.cost_price,
-                    subtotal: l.subtotal,
-                    uom_snapshot: l.uom,
-                }));
-
-                const { error: rpcError } = await supabase.rpc('rpc_update_purchase_draft_items', {
-                    p_purchase_id: initialPurchaseId,
-                    p_items: lineData
-                });
-
-                if (rpcError) throw rpcError;
-                await syncVendorItemCosts(vendorId, normalizedLines);
-
-                onSuccess(`Draft Updated! ID: ${initialPurchaseId}`);
-                onSaved?.(initialPurchaseId);
+                onSuccess(`Draft Updated! ID: ${savedPurchaseId}`);
+                onSaved?.(savedPurchaseId);
                 if (redirectOnSave) {
-                    queryClient.invalidateQueries({ queryKey: ["purchase-detail", initialPurchaseId] });
+                    queryClient.invalidateQueries({ queryKey: ["purchase-detail", savedPurchaseId] });
                     queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-                    navigate(`/purchases/${initialPurchaseId}`, { replace: true });
+                    navigate(`/purchases/${savedPurchaseId}`, { replace: true });
                 }
             } else {
-                const { data: purData, error: purError } = await supabase
-                    .from("purchases")
-                    .insert([
-                        {
-                            vendor_id: vendorId,
-                            purchase_date: purchaseDate,
-                            terms,
-                            status: "DRAFT",
-                            notes: notes || null,
-                            total_amount: totalAmount,
-                            discount_amount: discountAmount || 0,
-                            payment_method_code: terms === "CASH" ? paymentMethodCode : null,
-                        },
-                    ])
-                    .select()
-                    .single();
-
-                if (purError) throw purError;
-                const purId = purData.id;
-
-                const normalizedLines = normalizeLines(lines);
-                if (normalizedLines.length !== lines.length) {
-                    setLines(normalizedLines);
-                }
-
-                const lineData = normalizedLines.map((l) => ({
-                    purchase_id: purId,
-                    item_id: l.item_id,
-                    qty: l.qty,
-                    unit_cost: l.cost_price,
-                    subtotal: l.subtotal,
-                    uom_snapshot: l.uom,
-                }));
-                const { error: rpcError } = await supabase.rpc('rpc_update_purchase_draft_items', {
-                    p_purchase_id: purId,
-                    p_items: lineData
-                });
-                if (rpcError) throw rpcError;
-                await syncVendorItemCosts(vendorId, normalizedLines);
 
                 setLines([]);
                 setVendorId("");
@@ -500,12 +438,12 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
                 setPaymentMethodCode("");
                 setNotes("");
                 setDiscountAmount(0);
-                onSuccess(`Draft Created! ID: ${purId}`);
-                onSaved?.(purId);
+                onSuccess(`Draft Created! ID: ${savedPurchaseId}`);
+                onSaved?.(savedPurchaseId);
                 if (redirectOnSave) {
-                    queryClient.invalidateQueries({ queryKey: ["purchase-detail", purId] });
+                    queryClient.invalidateQueries({ queryKey: ["purchase-detail", savedPurchaseId] });
                     queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-                    navigate(`/purchases/${purId}`, { replace: true });
+                    navigate(`/purchases/${savedPurchaseId}`, { replace: true });
                 }
             }
         } catch (err: unknown) {
@@ -529,8 +467,7 @@ export function PurchaseEntryForm({ onSuccess, onError, onSaved, redirectOnSave 
         onSuccess,
         onSaved,
         redirectOnSave,
-        navigate,
-        syncVendorItemCosts
+        navigate
     ]);
 
     useEffect(() => {

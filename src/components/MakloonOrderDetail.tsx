@@ -243,7 +243,11 @@ export default function MakloonOrderDetail() {
   }, [id]);
 
   useEffect(() => {
-    fetchAll();
+    const timer = window.setTimeout(() => {
+      void fetchAll();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [fetchAll]);
 
   const handleUpdateStatus = async (newStatus: string) => {

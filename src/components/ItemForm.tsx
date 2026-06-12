@@ -25,6 +25,20 @@ type MasterData = {
     name: string
 }
 
+type SelectOption = {
+    label: string
+    value: string
+}
+
+type SelectWithAddProps = {
+    label: string
+    value?: string
+    onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+    options: SelectOption[]
+    onAdd?: () => void
+    disabled?: boolean
+}
+
 interface ItemFormProps {
     existingItem?: Item | null
     onSuccess: () => void
@@ -295,8 +309,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
     }
 
     // Helper for Select with Add Button
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SelectWithAdd = ({ label, value, onChange, options, onAdd, disabled }: any) => (
+    const SelectWithAdd = ({ label, value, onChange, options, onAdd, disabled }: SelectWithAddProps) => (
         <div className="flex flex-col mb-3">
             <div className="flex justify-between items-center mb-1.5">
                 <label className="text-sm font-medium text-[var(--text-main)]">{label}</label>
@@ -316,8 +329,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                 onChange={onChange}
                 disabled={disabled}
             >
-                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {options.map((opt: any) => (
+                {options.map((opt) => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
             </select>
@@ -471,7 +483,7 @@ export default function ItemForm({ existingItem, onSuccess, onCancel }: ItemForm
                                                 <SelectWithAdd
                                                     label="Raw Material"
                                                     value={bomItem.raw_material_id}
-                                                    onChange={(e: any) => handleBomItemChange(index, 'raw_material_id', e.target.value)}
+                                                    onChange={(e) => handleBomItemChange(index, 'raw_material_id', e.target.value)}
                                                     options={[
                                                         { label: '-- Select Material --', value: '' },
                                                         ...rawMaterials.map(rm => ({ label: rm.name, value: rm.id }))
